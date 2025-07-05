@@ -49,10 +49,10 @@ def create_sample_data():
     
     # Increase churn probability based on features
     prob_adjustments = (
-        (df['Age'] > 50) * 0.15 +  # Older customers more likely to churn
-        (df['Balance'] == 0) * 0.2 +  # Zero balance customers
-        (df['CreditScore'] < 600) * 0.15 +  # Poor credit score
-        (df['Tenure'] <= 1) * 0.1  # New customers
+        (df['Age'] > 50) * 0.15 +   # Older customers more likely to churn
+        (df['Balance'] == 0) * 0.2 +   # Zero balance customers
+        (df['CreditScore'] < 600) * 0.15 +   # Poor credit score
+        (df['Tenure'] <= 1) * 0.1   # New customers
     )
     
     final_prob = np.clip(churn_prob + prob_adjustments, 0, 0.8)
@@ -98,16 +98,22 @@ def train_model(df):
 
     # Calculate class weights to handle imbalanced data
     classes = np.unique(y_train)
-    class_weights = compute_class_weight('balanced', classes=classes, y=y_train)
-    class_weight_dict = dict(zip(classes, class_weights))
+    # Ensure both classes are present to compute weights
+    if 0 in classes and 1 in classes:
+        class_weights = compute_class_weight('balanced', classes=classes, y=y_train)
+        scale_pos_weight_val = class_weights[1] / class_weights[0]
+    else:
+        st.warning("Cannot compute class weights: one of the target classes (0 or 1) is missing in the training data. Setting scale_pos_weight to 1.")
+        scale_pos_weight_val = 1
     
     # Create pipeline with class weight balancing
     pipeline = Pipeline(steps=[
         ('preprocessor', preprocessor),
         ('classifier', XGBClassifier(
-            eval_metric='logloss', 
+            eval_metric='logloss',  
             random_state=42,
-            scale_pos_weight=class_weight_dict[1]/class_weight_dict[0]  # Handle imbalanced data
+            scale_pos_weight=scale_pos_weight_val,
+            use_label_encoder=False # Suppress future warning for XGBoost
         ))
     ])
 
@@ -160,6 +166,15 @@ def plot_feature_importance(pipeline, X_test, y_test):
         preprocessor = pipeline.named_steps['preprocessor']
         feature_names = preprocessor.get_feature_names_out()
         
+        # --- START FIX: Add length check for robustness ---
+        if len(feature_names) != len(perm_importance.importances_mean):
+            st.error(f"Internal Error: Mismatch in feature count for importance plot. "
+                     f"Expected {len(feature_names)} features from preprocessor, "
+                     f"but got {len(perm_importance.importances_mean)} importance values from permutation importance. "
+                     f"This indicates an unexpected issue with feature alignment. Please try reloading the app or contact support.")
+            return None # Exit function to prevent the DataFrame creation error
+        # --- END FIX ---
+
         # Create DataFrame for plotting
         importance_df = pd.DataFrame({
             'feature': feature_names,
@@ -172,7 +187,7 @@ def plot_feature_importance(pipeline, X_test, y_test):
         y_pos = np.arange(len(importance_df))
         
         bars = ax.barh(y_pos, importance_df['importance'], 
-                      xerr=importance_df['std'], capsize=3, color='skyblue')
+                       xerr=importance_df['std'], capsize=3, color='skyblue')
         
         ax.set_yticks(y_pos)
         ax.set_yticklabels(importance_df['feature'])
