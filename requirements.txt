@@ -3,6 +3,5 @@ pandas>=1.5.0
 numpy>=1.22.0
 matplotlib>=3.5.0
 seaborn>=0.11.2
-scikit-learn>=1.1.0
+scikit-learn>=1.3.0
 xgboost>=1.7.0
-imbalanced-learn>=0.10.0
