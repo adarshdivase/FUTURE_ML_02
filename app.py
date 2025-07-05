@@ -181,11 +181,16 @@ try:
                 
                 st.write("The plot below shows how each feature contributed to the final prediction. Red features increase churn risk, blue features decrease it.")
                 
-                # Generate the plot with Matplotlib and display it with st.pyplot
-                fig_force, ax_force = plt.subplots()
-                shap.force_plot(explainer.expected_value, shap_values[idx_pos,:], X_test.iloc[idx_pos,:], matplotlib=True, show=False)
-                st.pyplot(fig_force, bbox_inches='tight')
-                plt.close(fig_force) # Close the figure to free memory
+                # Create the force plot object for st.shap
+                force_plot = shap.force_plot(
+                    base_value=explainer.expected_value,
+                    shap_values=shap_values[idx_pos, :],
+                    features=X_test.iloc[idx_pos, :],
+                    show=False 
+                )
+                
+                # Render the plot using st.shap
+                st.shap(force_plot, height=200)
 
 except FileNotFoundError:
     st.error(f"Error: The data file was not found at '{CSV_FILE_PATH}'.")
