@@ -154,61 +154,43 @@ def plot_model_performance(y_test, y_pred, y_proba):
     plt.close(fig)
 
 def plot_feature_importance(pipeline, X_test, y_test):
-    """Create feature importance plot using permutation importance"""
+    """Create feature importance plot using permutation importance - Fixed version"""
     try:
-        # Get all feature names from the preprocessor's output
+        # Get feature names from the preprocessor
         preprocessor = pipeline.named_steps['preprocessor']
-        all_feature_names = preprocessor.get_feature_names_out()
         
-        # Calculate permutation importance
-        perm_importance = permutation_importance(pipeline, X_test, y_test, n_repeats=10, random_state=42)
+        # Fit the preprocessor to get feature names
+        preprocessor.fit(X_test)
+        feature_names = preprocessor.get_feature_names_out()
         
-        # Get the actual number of importance values returned by permutation_importance
-        num_importance_values = len(perm_importance.importances_mean)
+        # Transform the test data
+        X_test_transformed = preprocessor.transform(X_test)
         
-        # Create a dictionary to store importance and std for all features
-        # Initialize all to 0.0
-        feature_importance_data = {name: {'importance': 0.0, 'std': 0.0} for name in all_feature_names}
-
-        # Populate with actual permutation importance results
-        # We assume the order of perm_importance results corresponds to the order of features
-        # in `all_feature_names` up to the number of returned values.
-        # This handles cases where permutation_importance might return fewer values.
-        for i in range(num_importance_values):
-            if i < len(all_feature_names): # Ensure we don't go out of bounds of all_feature_names
-                feature_name = all_feature_names[i]
-                feature_importance_data[feature_name]['importance'] = perm_importance.importances_mean[i]
-                feature_importance_data[feature_name]['std'] = perm_importance.importances_std[i]
-            else:
-                # This case should ideally not be hit if all_feature_names is exhaustive
-                # and permutation_importance doesn't return more values than features.
-                st.warning(f"Unexpected: Permutation importance returned more values ({num_importance_values}) "
-                           f"than preprocessor output features ({len(all_feature_names)}). "
-                           f"Some importance values might be unassigned.")
-                break # Stop processing if we run out of feature names
-
-        # Warn if there was a discrepancy in counts
-        if len(all_feature_names) != num_importance_values:
-            st.warning(f"Warning: Mismatch detected between preprocessor output features ({len(all_feature_names)}) "
-                       f"and permutation importance values ({num_importance_values}). "
-                       f"Some features might have been implicitly ignored by permutation_importance (e.g., zero variance or perfect correlation). "
-                       f"Their importance has been set to 0 in the plot.")
-
-        # Prepare lists for the DataFrame, ensuring all_feature_names are included
-        features_for_df = []
-        importances_for_df = []
-        stds_for_df = []
-
-        for feature_name in all_feature_names:
-            features_for_df.append(feature_name)
-            importances_for_df.append(feature_importance_data[feature_name]['importance'])
-            stds_for_df.append(feature_importance_data[feature_name]['std'])
+        # Check for zero variance features
+        variances = np.var(X_test_transformed, axis=0)
+        non_zero_variance_mask = variances > 1e-10
         
-        # Create DataFrame for plotting
+        if not np.all(non_zero_variance_mask):
+            st.info(f"Found {np.sum(~non_zero_variance_mask)} features with zero or near-zero variance that will be excluded from importance analysis.")
+        
+        # Filter out zero variance features
+        X_test_filtered = X_test_transformed[:, non_zero_variance_mask]
+        feature_names_filtered = feature_names[non_zero_variance_mask]
+        
+        # Create a temporary pipeline with only the classifier for permutation importance
+        classifier = pipeline.named_steps['classifier']
+        
+        # Calculate permutation importance on the filtered data
+        perm_importance = permutation_importance(
+            classifier, X_test_filtered, y_test, 
+            n_repeats=5, random_state=42, n_jobs=1
+        )
+        
+        # Create importance DataFrame
         importance_df = pd.DataFrame({
-            'feature': features_for_df,
-            'importance': importances_for_df,
-            'std': stds_for_df
+            'feature': feature_names_filtered,
+            'importance': perm_importance.importances_mean,
+            'std': perm_importance.importances_std
         }).sort_values('importance', ascending=True)
         
         # Plot
@@ -221,7 +203,7 @@ def plot_feature_importance(pipeline, X_test, y_test):
         ax.set_yticks(y_pos)
         ax.set_yticklabels(importance_df['feature'])
         ax.set_xlabel('Permutation Importance')
-        ax.set_title('Feature Importance Analysis')
+        ax.set_title('Feature Importance Analysis (Non-Zero Variance Features)')
         ax.grid(True, alpha=0.3)
         
         # Add value labels on bars
@@ -233,6 +215,11 @@ def plot_feature_importance(pipeline, X_test, y_test):
         st.pyplot(fig)
         plt.close(fig)
         
+        # Show additional information about excluded features
+        if not np.all(non_zero_variance_mask):
+            excluded_features = feature_names[~non_zero_variance_mask]
+            st.info(f"**Excluded features (zero variance):** {', '.join(excluded_features)}")
+        
         return importance_df
         
     except Exception as e:
@@ -240,7 +227,7 @@ def plot_feature_importance(pipeline, X_test, y_test):
         return None
 
 def analyze_customer_prediction(pipeline, customer_data, feature_names):
-    """Analyze why a customer was predicted to churn or not"""
+    """Analyze why a customer was predicted to churn or not - Fixed version"""
     try:
         # Get the prediction and probability
         pred_proba = pipeline.predict_proba(customer_data)[0, 1]
@@ -250,24 +237,28 @@ def analyze_customer_prediction(pipeline, customer_data, feature_names):
         model = pipeline.named_steps['classifier']
         model_feature_importance = model.feature_importances_
         
+        # Transform the customer data
         preprocessor = pipeline.named_steps['preprocessor']
-        # Get feature names that the preprocessor outputs (these are the features the model was trained on)
-        preprocessor_output_feature_names = preprocessor.get_feature_names_out()
-
-        # Check for length mismatch between preprocessor output and model's feature importances
-        if len(preprocessor_output_feature_names) != len(model_feature_importance):
-            st.error(f"Internal Error in individual analysis: Mismatch between preprocessor output features "
-                     f"({len(preprocessor_output_feature_names)}) and model feature importances "
-                     f"({len(model_feature_importance)}). Cannot perform detailed analysis.")
-            return None, None, None
-
-        # Transform the customer data to get feature values in the model's feature space
         transformed_data = preprocessor.transform(customer_data)
+        
+        # Get feature names from preprocessor
+        preprocessor_feature_names = preprocessor.get_feature_names_out()
+        
+        # Ensure we have the right number of features
+        if len(preprocessor_feature_names) != len(model_feature_importance):
+            st.warning(f"Feature count mismatch: preprocessor has {len(preprocessor_feature_names)} features, "
+                      f"but model expects {len(model_feature_importance)} features. Using available features.")
+            
+            # Use the minimum length to avoid index errors
+            min_len = min(len(preprocessor_feature_names), len(model_feature_importance))
+            preprocessor_feature_names = preprocessor_feature_names[:min_len]
+            model_feature_importance = model_feature_importance[:min_len]
+            transformed_data = transformed_data[:, :min_len]
         
         # Create analysis DataFrame
         analysis_df = pd.DataFrame({
-            'feature': preprocessor_output_feature_names, # Use the names from preprocessor output
-            'value': transformed_data[0], # Use the transformed values
+            'feature': preprocessor_feature_names,
+            'value': transformed_data[0],
             'importance': model_feature_importance
         })
         
@@ -335,7 +326,6 @@ if df is not None:
         
         st.markdown("---")
 
-    if pipeline:
         tab1, tab2, tab3 = st.tabs(["📊 Model Performance", "🔮 Live Prediction", "🧠 Feature Analysis"])
 
         with tab1:
