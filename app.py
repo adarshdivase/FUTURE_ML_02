@@ -166,28 +166,33 @@ def plot_feature_importance(pipeline, X_test, y_test):
         # Get the actual number of importance values returned by permutation_importance
         num_importance_values = len(perm_importance.importances_mean)
         
-        # Create a mapping from the feature names returned by permutation_importance
-        # to their mean importance and std.
-        # Note: perm_importance.feature_names_ is not directly available,
-        # so we rely on the order matching the transformed X_test features.
-        # We assume perm_importance results correspond to the features in all_feature_names
-        # up to the length of perm_importance.importances_mean.
-        
-        importance_map = {}
+        # Create a dictionary to store importance and std for all features
+        # Initialize all to 0.0
+        feature_importance_data = {name: {'importance': 0.0, 'std': 0.0} for name in all_feature_names}
+
+        # Populate with actual permutation importance results
+        # We assume the order of perm_importance results corresponds to the order of features
+        # in `all_feature_names` up to the number of returned values.
+        # This handles cases where permutation_importance might return fewer values.
         for i in range(num_importance_values):
-            # This assumes the order of features in perm_importance matches the initial part of all_feature_names
-            # This is generally true unless permutation_importance internally reorders or drops features without explicit naming.
-            # Given the error, it's more likely some features are just not included in the output.
-            if i < len(all_feature_names):
-                importance_map[all_feature_names[i]] = {
-                    'importance': perm_importance.importances_mean[i],
-                    'std': perm_importance.importances_std[i]
-                }
+            if i < len(all_feature_names): # Ensure we don't go out of bounds of all_feature_names
+                feature_name = all_feature_names[i]
+                feature_importance_data[feature_name]['importance'] = perm_importance.importances_mean[i]
+                feature_importance_data[feature_name]['std'] = perm_importance.importances_std[i]
             else:
-                # This case should ideally not happen if all_feature_names are correctly ordered and exhaustive
-                # relative to what permutation_importance processes.
-                st.warning(f"Feature name index {i} out of bounds for all_feature_names ({len(all_feature_names)}).")
-                break
+                # This case should ideally not be hit if all_feature_names is exhaustive
+                # and permutation_importance doesn't return more values than features.
+                st.warning(f"Unexpected: Permutation importance returned more values ({num_importance_values}) "
+                           f"than preprocessor output features ({len(all_feature_names)}). "
+                           f"Some importance values might be unassigned.")
+                break # Stop processing if we run out of feature names
+
+        # Warn if there was a discrepancy in counts
+        if len(all_feature_names) != num_importance_values:
+            st.warning(f"Warning: Mismatch detected between preprocessor output features ({len(all_feature_names)}) "
+                       f"and permutation importance values ({num_importance_values}). "
+                       f"Some features might have been implicitly ignored by permutation_importance (e.g., zero variance or perfect correlation). "
+                       f"Their importance has been set to 0 in the plot.")
 
         # Prepare lists for the DataFrame, ensuring all_feature_names are included
         features_for_df = []
@@ -195,25 +200,10 @@ def plot_feature_importance(pipeline, X_test, y_test):
         stds_for_df = []
 
         for feature_name in all_feature_names:
-            if feature_name in importance_map:
-                features_for_df.append(feature_name)
-                importances_for_df.append(importance_map[feature_name]['importance'])
-                stds_for_df.append(importance_map[feature_name]['std'])
-            else:
-                # If a feature from all_feature_names is not in importance_map,
-                # it means permutation_importance did not return a value for it.
-                # Set its importance to 0.
-                features_for_df.append(feature_name)
-                importances_for_df.append(0.0)
-                stds_for_df.append(0.0)
+            features_for_df.append(feature_name)
+            importances_for_df.append(feature_importance_data[feature_name]['importance'])
+            stds_for_df.append(feature_importance_data[feature_name]['std'])
         
-        # Warn if there was a discrepancy
-        if len(all_feature_names) != num_importance_values:
-            st.warning(f"Warning: Mismatch detected between preprocessor output features ({len(all_feature_names)}) "
-                       f"and permutation importance values ({num_importance_values}). "
-                       f"Some features might have been implicitly ignored by permutation_importance (e.g., zero variance or perfect correlation). "
-                       f"Their importance has been set to 0 in the plot.")
-
         # Create DataFrame for plotting
         importance_df = pd.DataFrame({
             'feature': features_for_df,
@@ -509,4 +499,3 @@ if df is not None:
         st.error("Failed to train the model. Please check your data and try again.")
 else:
     st.error("No data available. Please upload a CSV file or check the sample data generation.")
-
