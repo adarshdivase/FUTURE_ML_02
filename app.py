@@ -154,7 +154,7 @@ def plot_model_performance(y_test, y_pred, y_proba):
     plt.close(fig)
 
 def plot_feature_importance(pipeline, X_test, y_test):
-    """Create feature importance plot using permutation importance - Improved version"""
+    """Create feature importance plot using permutation importance - Fixed alignment version"""
     try:
         # Get feature names from the preprocessor
         preprocessor = pipeline.named_steps['preprocessor']
@@ -198,71 +198,61 @@ def plot_feature_importance(pipeline, X_test, y_test):
         for feature in importance_df['feature']:
             # Remove prefixes and make more readable
             if feature.startswith('num__'):
-                clean_name = feature.replace('num__', '')
+                cleaned_features.append(feature.replace('num__', ''))
             elif feature.startswith('cat__'):
-                clean_name = feature.replace('cat__', '').replace('_', ' ')
+                cleaned_features.append(feature.replace('cat__', '').replace('_', ' ').title())
             else:
-                clean_name = feature.replace('_', ' ')
-            
-            # Capitalize first letter of each word
-            clean_name = ' '.join(word.capitalize() for word in clean_name.split())
-            cleaned_features.append(clean_name)
+                cleaned_features.append(feature.replace('_', ' ').title())
         
-        # Create figure with better dimensions
+        # Create the plot with improved dimensions
         fig, ax = plt.subplots(figsize=(14, max(8, len(importance_df) * 0.4)))
         
-        # Create color map based on importance values
-        colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(importance_df)))
+        # Create color gradient based on importance values
+        colors = plt.cm.RdYlBu_r(np.linspace(0.2, 0.8, len(importance_df)))
         
         # Create horizontal bar plot
-        y_pos = np.arange(len(importance_df))
-        bars = ax.barh(y_pos, importance_df['importance'], 
-                       xerr=importance_df['std'], 
-                       capsize=4, 
-                       color=colors,
-                       edgecolor='white', 
-                       linewidth=1,
-                       alpha=0.8)
+        bars = ax.barh(range(len(importance_df)), importance_df['importance'], 
+                       xerr=importance_df['std'], capsize=4, 
+                       color=colors, edgecolor='black', linewidth=0.5, alpha=0.8)
         
-        # Set y-axis properties with improved spacing
-        ax.set_yticks(y_pos)
-        ax.set_yticklabels(cleaned_features, fontsize=11, fontweight='medium')
+        # Set y-axis properties with proper alignment
+        ax.set_yticks(range(len(importance_df)))
+        ax.set_yticklabels(cleaned_features, fontsize=11, ha='right')
         
         # Improve x-axis
-        ax.set_xlabel('Permutation Importance', fontsize=13, fontweight='bold', labelpad=10)
-        ax.set_title('Feature Importance Analysis\n(Permutation-based)', 
+        ax.set_xlabel('Permutation Importance', fontsize=14, fontweight='bold')
+        ax.set_title('Feature Importance Analysis\n(Higher values indicate more important features)', 
                     fontsize=16, fontweight='bold', pad=25)
         
-        # Add subtle grid
-        ax.grid(True, alpha=0.3, axis='x', linestyle='--', linewidth=0.5)
+        # Add grid for better readability
+        ax.grid(True, alpha=0.3, axis='x', linestyle='--')
         ax.set_axisbelow(True)
         
-        # Add value labels on bars with better positioning
+        # Calculate proper x-axis limits
         max_val = importance_df['importance'].max()
+        max_error = importance_df['std'].max()
+        x_limit = max_val + max_error + (max_val * 0.25)  # 25% padding for labels
+        ax.set_xlim(0, x_limit)
+        
+        # Add value labels with better positioning
         for i, (bar, val, std) in enumerate(zip(bars, importance_df['importance'], importance_df['std'])):
-            # Position text with better spacing
-            text_x = bar.get_width() + max_val * 0.01
+            # Position text at the end of the error bar
+            text_x = val + std + (max_val * 0.02)
             ax.text(text_x, bar.get_y() + bar.get_height()/2, 
-                   f'{val:.3f}', 
-                   va='center', ha='left', 
-                   fontsize=10, fontweight='bold',
-                   bbox=dict(boxstyle="round,pad=0.2", facecolor='white', alpha=0.8, edgecolor='gray'))
+                   f'{val:.4f}', va='center', ha='left', 
+                   fontsize=10, fontweight='bold', color='black')
         
-        # Set x-axis limits with better margins
-        ax.set_xlim(0, max_val * 1.25)
-        
-        # Improve plot aesthetics
+        # Remove top and right spines for cleaner look
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_linewidth(1.5)
-        ax.spines['bottom'].set_linewidth(1.5)
-        
-        # Add a subtle background color
-        ax.set_facecolor('#f8f9fa')
+        ax.spines['left'].set_linewidth(0.5)
+        ax.spines['bottom'].set_linewidth(0.5)
         
         # Adjust layout to prevent label cutoff
         plt.tight_layout()
-        plt.subplots_adjust(left=0.25, right=0.95, top=0.9, bottom=0.1)
+        
+        # Additional padding for y-axis labels
+        plt.subplots_adjust(left=0.25)
         
         st.pyplot(fig)
         plt.close(fig)
@@ -270,8 +260,7 @@ def plot_feature_importance(pipeline, X_test, y_test):
         # Show additional information about excluded features
         if not np.all(non_zero_variance_mask):
             excluded_features = feature_names[~non_zero_variance_mask]
-            with st.expander("ℹ️ Excluded Features (Zero Variance)"):
-                st.write(f"**Excluded features:** {', '.join(excluded_features)}")
+            st.info(f"**Excluded features (zero variance):** {', '.join(excluded_features)}")
         
         return importance_df
         
@@ -280,7 +269,7 @@ def plot_feature_importance(pipeline, X_test, y_test):
         return None
 
 def analyze_customer_prediction(pipeline, customer_data, feature_names):
-    """Analyze why a customer was predicted to churn or not - Fixed version"""
+    """Analyze why a customer was predicted to churn or not - Fixed alignment version"""
     try:
         # Get the prediction and probability
         pred_proba = pipeline.predict_proba(customer_data)[0, 1]
@@ -323,6 +312,71 @@ def analyze_customer_prediction(pipeline, customer_data, feature_names):
     except Exception as e:
         st.error(f"Error analyzing customer prediction: {e}")
         return None, None, None
+
+def plot_individual_customer_analysis(analysis_df, customer_data):
+    """Create improved individual customer analysis plot"""
+    # Get top 10 features for individual analysis
+    top_features = analysis_df.head(10).copy()
+    
+    # Clean up feature names for better readability
+    cleaned_feature_names = []
+    for feature in top_features['feature']:
+        if feature.startswith('num__'):
+            cleaned_feature_names.append(feature.replace('num__', ''))
+        elif feature.startswith('cat__'):
+            cleaned_feature_names.append(feature.replace('cat__', '').replace('_', ' ').title())
+        else:
+            cleaned_feature_names.append(feature.replace('_', ' ').title())
+    
+    # Create the plot with improved dimensions
+    fig, ax = plt.subplots(figsize=(14, max(8, len(top_features) * 0.5)))
+    
+    # Create color scheme based on feature importance
+    importance_normalized = (top_features['importance'] - top_features['importance'].min()) / (top_features['importance'].max() - top_features['importance'].min())
+    colors = plt.cm.RdYlGn_r(importance_normalized)
+    
+    # Create horizontal bar plot
+    bars = ax.barh(range(len(top_features)), top_features['importance'], 
+                   color=colors, edgecolor='black', linewidth=0.7, alpha=0.8)
+    
+    # Set y-axis properties with proper alignment
+    ax.set_yticks(range(len(top_features)))
+    ax.set_yticklabels(cleaned_feature_names, fontsize=12, ha='right')
+    
+    # Improve x-axis
+    ax.set_xlabel('Feature Importance', fontsize=14, fontweight='bold')
+    ax.set_title('Top 10 Feature Contributions for Selected Customer\n(Higher values indicate stronger influence on prediction)', 
+                fontsize=16, fontweight='bold', pad=25)
+    
+    # Add grid for better readability
+    ax.grid(True, alpha=0.3, axis='x', linestyle='--')
+    ax.set_axisbelow(True)
+    
+    # Calculate proper x-axis limits
+    max_val = top_features['importance'].max()
+    x_limit = max_val + (max_val * 0.25)  # 25% padding for labels
+    ax.set_xlim(0, x_limit)
+    
+    # Add value labels with better positioning
+    for i, (bar, val) in enumerate(zip(bars, top_features['importance'])):
+        text_x = val + (max_val * 0.02)
+        ax.text(text_x, bar.get_y() + bar.get_height()/2, 
+               f'{val:.4f}', va='center', ha='left', 
+               fontsize=11, fontweight='bold', color='black')
+    
+    # Remove top and right spines for cleaner look
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_linewidth(0.5)
+    ax.spines['bottom'].set_linewidth(0.5)
+    
+    # Adjust layout to prevent label cutoff
+    plt.tight_layout()
+    
+    # Additional padding for y-axis labels
+    plt.subplots_adjust(left=0.3)
+    
+    return fig
 
 # Main app
 st.title("🏆 Professional Bank Customer Churn Prediction")
@@ -455,7 +509,16 @@ if df is not None:
                 st.write("**Top 5 Most Important Features:**")
                 top_features = importance_df.tail(5).sort_values('importance', ascending=False)
                 for idx, row in top_features.iterrows():
-                    st.write(f"• **{row['feature']}**: {row['importance']:.3f} ± {row['std']:.3f}")
+                    # Clean up feature names for display
+                    feature_name = row['feature']
+                    if feature_name.startswith('num__'):
+                        feature_name = feature_name.replace('num__', '')
+                    elif feature_name.startswith('cat__'):
+                        feature_name = feature_name.replace('cat__', '').replace('_', ' ').title()
+                    else:
+                        feature_name = feature_name.replace('_', ' ').title()
+                    
+                    st.write(f"• **{feature_name}**: {row['importance']:.4f} ± {row['std']:.4f}")
             
             st.markdown("---")
             
@@ -487,7 +550,10 @@ if df is not None:
                     with col1:
                         st.write("**Customer Details:**")
                         for feature, value in customer_data.iloc[0].items():
-                            st.write(f"- {feature}: {value}")
+                            if isinstance(value, float):
+                                st.write(f"- {feature}: {value:,.2f}")
+                            else:
+                                st.write(f"- {feature}: {value}")
                     
                     with col2:
                         st.write("**Prediction Results:**")
@@ -497,93 +563,59 @@ if df is not None:
                         prediction_correct = pred_class == actual_churn
                         st.write(f"- Prediction Correct: {'✅ Yes' if prediction_correct else '❌ No'}")
                     
-                    # Show feature analysis - IMPROVED VERSION
+                    # Show feature analysis with improved plot
                     st.subheader("Feature Analysis for Selected Customer")
                     
-                    # Plot top contributing features with improved styling
-                    fig, ax = plt.subplots(figsize=(14, 10))
-                    
-                    top_features = analysis_df.head(10)
-                    
-                    # Create better color scheme based on feature importance
-                    norm = plt.Normalize(vmin=top_features['importance'].min(), vmax=top_features['importance'].max())
-                    colors = plt.cm.RdYlBu_r(norm(top_features['importance'].values))
-                    
-                    bars = ax.barh(range(len(top_features)), top_features['importance'], 
-                                  color=colors, alpha=0.8, edgecolor='white', linewidth=1.5)
-                    
-                    # Clean up feature names for better readability
-                    cleaned_feature_names = []
-                    for feature in top_features['feature']:
-                        if feature.startswith('num__'):
-                            clean_name = feature.replace('num__', '')
-                        elif feature.startswith('cat__'):
-                            clean_name = feature.replace('cat__', '').replace('_', ' ')
-                        else:
-                            clean_name = feature.replace('_', ' ')
-                        
-                        # Capitalize first letter of each word
-                        clean_name = ' '.join(word.capitalize() for word in clean_name.split())
-                        cleaned_feature_names.append(clean_name)
-                    
-                    # Set y-axis with improved spacing
-                    ax.set_yticks(range(len(top_features)))
-                    ax.set_yticklabels(cleaned_feature_names, fontsize=12, fontweight='medium')
-                    
-                    # Improve axis labels and title
-                    ax.set_xlabel('Feature Importance', fontsize=14, fontweight='bold', labelpad=12)
-                    ax.set_title(f'Top 10 Feature Contributions for {selected_customer}\n'
-                                f'Churn Probability: {pred_proba:.1%} | Prediction: {"High Risk" if pred_proba > 0.5 else "Low Risk"}', 
-                                fontsize=16, fontweight='bold', pad=25)
-                    
-                    # Add subtle grid
-                    ax.grid(True, alpha=0.3, axis='x', linestyle='--', linewidth=0.5)
-                    ax.set_axisbelow(True)
-                    
-                    # Add value labels with better positioning and styling
-                    max_val = top_features['importance'].max()
-                    for i, (bar, val) in enumerate(zip(bars, top_features['importance'])):
-                        # Position text with better spacing
-                        text_x = bar.get_width() + max_val * 0.01
-                        ax.text(text_x, bar.get_y() + bar.get_height()/2, 
-                               f'{val:.3f}', 
-                               va='center', ha='left', 
-                               fontsize=11, fontweight='bold',
-                               bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.9, edgecolor='gray'))
-                    
-                    # Set x-axis limits with better margins
-                    ax.set_xlim(0, max_val * 1.3)
-                    
-                    # Improve plot aesthetics
-                    ax.spines['top'].set_visible(False)
-                    ax.spines['right'].set_visible(False)
-                    ax.spines['left'].set_linewidth(1.5)
-                    ax.spines['bottom'].set_linewidth(1.5)
-                    
-                    # Add background color
-                    ax.set_facecolor('#f8f9fa')
-                    
-                    # Adjust layout to prevent label cutoff
-                    plt.tight_layout()
-                    plt.subplots_adjust(left=0.25, right=0.95, top=0.85, bottom=0.1)
-                    
+                    # Use the improved plotting function
+                    fig = plot_individual_customer_analysis(analysis_df, customer_data)
                     st.pyplot(fig)
                     plt.close(fig)
                     
-                    # Interpretation
+                    # Interpretation with better formatting
                     st.subheader("Interpretation")
+                    
+                    # Get top 3 features for interpretation
+                    top_3_features = analysis_df.head(3)
+                    
                     if pred_proba > 0.5:
                         st.error("🚨 **High Churn Risk Customer**")
                         st.write("**Key risk factors:**")
-                        risk_factors = top_features.head(3)
-                        for _, row in risk_factors.iterrows():
-                            st.write(f"• {row['feature']}: Feature importance {row['importance']:.3f}")
+                        for idx, row in top_3_features.iterrows():
+                            feature_name = row['feature']
+                            if feature_name.startswith('num__'):
+                                feature_name = feature_name.replace('num__', '')
+                            elif feature_name.startswith('cat__'):
+                                feature_name = feature_name.replace('cat__', '').replace('_', ' ').title()
+                            else:
+                                feature_name = feature_name.replace('_', ' ').title()
+                            
+                            st.write(f"• **{feature_name}**: Feature importance {row['importance']:.4f}")
+                            
+                        # Add actionable recommendations
+                        st.write("\n**Recommended Actions:**")
+                        st.write("- Immediate contact with retention team")
+                        st.write("- Offer personalized incentives")
+                        st.write("- Schedule account review meeting")
+                        
                     else:
                         st.success("✅ **Low Churn Risk Customer**")
                         st.write("**Retention factors:**")
-                        retention_factors = top_features.head(3)
-                        for _, row in retention_factors.iterrows():
-                            st.write(f"• {row['feature']}: Feature importance {row['importance']:.3f}")
+                        for idx, row in top_3_features.iterrows():
+                            feature_name = row['feature']
+                            if feature_name.startswith('num__'):
+                                feature_name = feature_name.replace('num__', '')
+                            elif feature_name.startswith('cat__'):
+                                feature_name = feature_name.replace('cat__', '').replace('_', ' ').title()
+                            else:
+                                feature_name = feature_name.replace('_', ' ').title()
+                            
+                            st.write(f"• **{feature_name}**: Feature importance {row['importance']:.4f}")
+                            
+                        # Add maintenance recommendations
+                        st.write("\n**Recommended Actions:**")
+                        st.write("- Continue current service level")
+                        st.write("- Consider cross-selling opportunities")
+                        st.write("- Regular satisfaction surveys")
             else:
                 st.error("No test data available for analysis.")
     else:
