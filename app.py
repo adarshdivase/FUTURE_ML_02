@@ -35,7 +35,8 @@ def load_data(path):
     """Loads and preprocesses the Bank Churn dataset."""
     df = pd.read_csv(path)
     # Drop columns that are identifiers and not useful for modeling
-    df.drop(columns=['RowNumber', 'CustomerId', 'Surname'], inplace=True)
+    if 'RowNumber' in df.columns:
+        df.drop(columns=['RowNumber', 'CustomerId', 'Surname'], inplace=True)
     return df
 
 @st.cache_resource
@@ -44,16 +45,19 @@ def train_model(df):
     X = df.drop('Exited', axis=1)
     y = df['Exited']
 
-    # Define categorical and numerical features
-    categorical_features = ['Geography', 'Gender']
-    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'NumOfProducts', 'HasCrCard', 'IsActiveMember', 'EstimatedSalary']
+    # --- DYNAMIC FEATURE DETECTION (THE FIX) ---
+    # Automatically detect categorical and numerical features from the dataframe
+    categorical_features = X.select_dtypes(include=['object', 'category']).columns.tolist()
+    numerical_features = X.select_dtypes(include=np.number).columns.tolist()
 
     # Create a preprocessor
     preprocessor = ColumnTransformer(
         transformers=[
             ('num', StandardScaler(), numerical_features),
             ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_features)
-        ])
+        ],
+        remainder='passthrough' # Keep other columns if any
+    )
 
     # Split data before training
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
@@ -66,7 +70,6 @@ def train_model(df):
     ])
     
     # --- Hyperparameter Tuning with GridSearchCV ---
-    # Define a smaller, more focused parameter grid for faster tuning on Streamlit Cloud
     param_grid = {
         'classifier__n_estimators': [100, 200],
         'classifier__max_depth': [3, 5],
@@ -77,7 +80,6 @@ def train_model(df):
     grid_search = GridSearchCV(xgb_pipeline, param_grid, cv=3, scoring='roc_auc', n_jobs=1, verbose=2)
     grid_search.fit(X_train, y_train)
     
-    # The best pipeline found by the grid search
     best_pipeline = grid_search.best_estimator_
     
     return best_pipeline, X_test, y_test, X_train
@@ -98,7 +100,7 @@ def plot_model_performance(y_test, y_pred, y_proba):
     ax2.set_title('ROC Curve'); ax2.legend()
     
     st.pyplot(fig)
-    plt.clf()
+    plt.close(fig) # Close the figure to free memory
 
 # --- Main App ---
 st.title("🏆 Professional Bank Customer Churn Prediction")
@@ -132,26 +134,27 @@ try:
         with tab2:
             st.header("🔮 Predict Churn for a New Customer")
             with st.form("prediction_form"):
-                credit_score = st.slider("Credit Score", 300, 850, 650)
-                geography = st.selectbox("Geography", df['Geography'].unique())
-                gender = st.selectbox("Gender", df['Gender'].unique())
-                age = st.slider("Age", 18, 100, 35)
-                tenure = st.slider("Tenure (years)", 0, 10, 5)
-                balance = st.slider("Balance", 0.0, 250000.0, 0.0)
-                num_of_products = st.selectbox("Number of Products", df['NumOfProducts'].unique())
-                has_cr_card = st.selectbox("Has Credit Card?", df['HasCrCard'].unique(), format_func=lambda x: 'Yes' if x == 1 else 'No')
-                is_active_member = st.selectbox("Is Active Member?", df['IsActiveMember'].unique(), format_func=lambda x: 'Yes' if x == 1 else 'No')
-                estimated_salary = st.slider("Estimated Salary", 0.0, 200000.0, 50000.0)
+                # Dynamically create input fields based on available columns
+                input_data_dict = {}
+                
+                # Get a list of all original feature columns
+                feature_cols = df.drop('Exited', axis=1).columns
+                
+                for col in feature_cols:
+                    if pd.api.types.is_numeric_dtype(df[col]):
+                        if df[col].nunique() > 2: # Treat as a slider if more than 2 unique values
+                            min_val, max_val = float(df[col].min()), float(df[col].max())
+                            default_val = float(df[col].median())
+                            input_data_dict[col] = st.slider(f"{col}", min_val, max_val, default_val)
+                        else: # Treat as a selectbox if binary (0/1)
+                            input_data_dict[col] = st.selectbox(f"{col}", df[col].unique(), format_func=lambda x: 'Yes' if x == 1 else 'No')
+                    else: # Categorical
+                        input_data_dict[col] = st.selectbox(f"{col}", df[col].unique())
                 
                 submitted = st.form_submit_button("Predict Churn")
 
             if submitted:
-                input_data = pd.DataFrame({
-                    'CreditScore': [credit_score], 'Geography': [geography], 'Gender': [gender],
-                    'Age': [age], 'Tenure': [tenure], 'Balance': [balance],
-                    'NumOfProducts': [num_of_products], 'HasCrCard': [has_cr_card],
-                    'IsActiveMember': [is_active_member], 'EstimatedSalary': [estimated_salary]
-                })
+                input_data = pd.DataFrame([input_data_dict])
                 churn_proba = pipeline.predict_proba(input_data)[0, 1]
                 
                 st.subheader("Prediction Result")
@@ -167,7 +170,6 @@ try:
                 model = pipeline.named_steps['classifier']
                 
                 X_test_transformed = preprocessor.transform(X_test)
-                X_test_transformed_df = pd.DataFrame(X_test_transformed, columns=preprocessor.get_feature_names_out())
                 
                 explainer = shap.TreeExplainer(model)
                 shap_values = explainer.shap_values(X_test_transformed)
@@ -180,10 +182,18 @@ try:
                 idx_pos = X_test.index.get_loc(selected_idx)
                 
                 st.write("The plot below shows how each feature contributed to the final prediction. Red features increase churn risk, blue features decrease it.")
-                fig_force, ax_force = plt.subplots()
-                shap.force_plot(explainer.expected_value, shap_values[idx_pos,:], X_test.iloc[idx_pos,:], matplotlib=True, show=False)
-                st.pyplot(fig_force, bbox_inches='tight')
-                plt.clf()
+                
+                # --- THIS IS THE FIX for the st.shap error ---
+                # Create the plot object for st.shap
+                force_plot = shap.force_plot(
+                    base_value=explainer.expected_value,
+                    shap_values=shap_values[idx_pos, :],
+                    features=X_test.iloc[idx_pos, :],
+                    show=False 
+                )
+                
+                # Render the plot using st.shap
+                st.shap(force_plot, height=200)
 
 except FileNotFoundError:
     st.error(f"Error: The data file was not found at '{CSV_FILE_PATH}'.")
