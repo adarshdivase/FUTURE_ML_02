@@ -32,6 +32,12 @@ CSV_FILE_PATH = "Customer Churn new.csv" # Make sure your CSV file is named this
 def load_data(path):
     """Loads and preprocesses the Telco Churn dataset."""
     df = pd.read_csv(path)
+    
+    # --- THIS IS THE FIX ---
+    # Check for the column with a space and rename it to match the expected name.
+    if 'Total Charges' in df.columns:
+        df.rename(columns={'Total Charges': 'TotalCharges'}, inplace=True)
+
     # Data Cleaning
     df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
     df.dropna(inplace=True)
