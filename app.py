@@ -39,6 +39,11 @@ def load_data(path):
         # Drop columns that are identifiers and not useful for modeling
         if 'RowNumber' in df.columns:
             df.drop(columns=['RowNumber', 'CustomerId', 'Surname'], inplace=True)
+        
+        # --- ADDED: Print columns for debugging ---
+        st.write("Columns loaded from CSV:", df.columns.tolist())
+        # --- END ADDED ---
+        
         return df
     except FileNotFoundError:
         st.error(f"Error: The data file was not found at '{path}'. Please ensure 'Customer Churn new.csv' is in the same directory as app.py.")
@@ -59,6 +64,14 @@ def train_model(df):
     # Define categorical and numerical features
     categorical_features = ['Geography', 'Gender']
     numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'NumOfProducts', 'HasCrCard', 'IsActiveMember', 'EstimatedSalary']
+
+    # --- ADDED: Check for existence of all required features ---
+    all_features = numerical_features + categorical_features
+    missing_features = [f for f in all_features if f not in X.columns]
+    if missing_features:
+        st.error(f"Error: The following required features are missing from your dataset: {', '.join(missing_features)}. Please check your CSV file and the feature lists in app.py.")
+        return None, None, None, None
+    # --- END ADDED ---
 
     # Create a preprocessor
     preprocessor = ColumnTransformer(
@@ -89,7 +102,13 @@ def train_model(df):
 
     # Grid search with cross-validation. n_jobs=1 is more stable for deployment.
     grid_search = GridSearchCV(xgb_pipeline, param_grid, cv=3, scoring='roc_auc', n_jobs=1, verbose=0) # verbose=0 for cleaner output
-    grid_search.fit(X_train, y_train)
+    
+    try: # Added try-except for grid search fit
+        grid_search.fit(X_train, y_train)
+    except Exception as e:
+        st.error(f"An error occurred during model training (GridSearchCV fit): {e}")
+        st.info("This might be due to incorrect column names after preprocessing. Please check the 'Columns loaded from CSV' output.")
+        return None, None, None, None
     
     # The best pipeline found by the grid search
     best_pipeline = grid_search.best_estimator_
