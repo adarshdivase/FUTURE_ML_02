@@ -509,4 +509,4 @@ if df is not None:
         st.error("Failed to train the model. Please check your data and try again.")
 else:
     st.error("No data available. Please upload a CSV file or check the sample data generation.")
-s
+
