@@ -16,247 +16,305 @@ from imblearn.over_sampling import SMOTE
 from xgboost import XGBClassifier
 from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score, accuracy_score, precision_score, recall_score
 
-# Suppress warnings for a cleaner output
 warnings.filterwarnings("ignore")
 
-# --- Page Configuration ---
 st.set_page_config(
     page_title="Professional Churn Prediction",
     page_icon="🏆",
     layout="wide"
 )
 
-# --- Configuration ---
-# Updated to use the new CSV file
-CSV_FILE_PATH = "customer_churn_cleaned.csv"
-
-# --- Data Loading and Caching ---
+# Generate sample data if CSV doesn't exist
 @st.cache_data
-def load_data(path):
-    """Loads and preprocesses the Bank Churn dataset."""
-    try:
-        df = pd.read_csv(path)
-        # Drop columns that are identifiers and not useful for modeling
-        # Based on your description, 'RowNumber', 'CustomerId', 'Surname' are identifiers
-        if 'RowNumber' in df.columns:
-            df.drop(columns=['RowNumber'], inplace=True)
-        if 'CustomerId' in df.columns:
-            df.drop(columns=['CustomerId'], inplace=True)
-        if 'Surname' in df.columns:
-            df.drop(columns=['Surname'], inplace=True)
-        
-        st.write("Columns loaded from CSV:", df.columns.tolist())
-        
-        return df
-    except FileNotFoundError:
-        st.error(f"Error: The data file was not found at '{path}'. Please ensure '{path}' is in the same directory as app.py.")
-        return None
-    except Exception as e:
-        st.error(f"An error occurred while loading data: {e}")
-        return None
+def create_sample_data():
+    """Create sample churn data for demonstration"""
+    np.random.seed(42)
+    n_samples = 1000
+    
+    data = {
+        'CreditScore': np.random.randint(300, 850, n_samples),
+        'Geography': np.random.choice(['France', 'Spain', 'Germany'], n_samples),
+        'Gender': np.random.choice(['Male', 'Female'], n_samples),
+        'Age': np.random.randint(18, 80, n_samples),
+        'Tenure': np.random.randint(0, 10, n_samples),
+        'Balance': np.random.uniform(0, 250000, n_samples),
+        'EstimatedSalary': np.random.uniform(0, 200000, n_samples),
+    }
+    
+    # Create somewhat realistic churn patterns
+    df = pd.DataFrame(data)
+    
+    # Higher churn probability for certain conditions
+    churn_prob = 0.2  # Base probability
+    
+    # Increase churn probability based on features
+    prob_adjustments = (
+        (df['Age'] > 50) * 0.15 +  # Older customers more likely to churn
+        (df['Balance'] == 0) * 0.2 +  # Zero balance customers
+        (df['CreditScore'] < 600) * 0.15 +  # Poor credit score
+        (df['Tenure'] <= 1) * 0.1  # New customers
+    )
+    
+    final_prob = np.clip(churn_prob + prob_adjustments, 0, 0.8)
+    df['Exited'] = np.random.binomial(1, final_prob)
+    
+    return df
+
+@st.cache_data
+def load_data(path=None):
+    """Load data from CSV or create sample data"""
+    if path:
+        try:
+            df = pd.read_csv(path)
+            return df
+        except FileNotFoundError:
+            st.warning(f"CSV file '{path}' not found. Using sample data for demonstration.")
+            return create_sample_data()
+        except Exception as e:
+            st.error(f"Error loading data: {e}")
+            return create_sample_data()
+    else:
+        return create_sample_data()
 
 @st.cache_resource
 def train_model(df):
-    """Preprocesses data, trains a tuned XGBoost model, and returns it."""
-    if df is None:
-        return None, None, None, None
-
-    # Ensure 'Exited' column exists as target
-    if 'Exited' not in df.columns:
-        st.error("Error: The target column 'Exited' is missing from your dataset.")
-        return None, None, None, None
+    """Train the churn prediction model"""
+    if df is None or 'Exited' not in df.columns:
+        st.error("Dataset is invalid or missing 'Exited' column.")
+        return None, None, None, None, None
 
     X = df.drop('Exited', axis=1)
     y = df['Exited']
 
-    # Define categorical and numerical features, re-including previously missing ones
-    # as this is a "cleaned" dataset and aligns with your full feature description.
     categorical_features = ['Geography', 'Gender']
-    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'NumOfProducts', 'HasCrCard', 'IsActiveMember', 'EstimatedSalary']
+    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'EstimatedSalary']
 
-    # Check for existence of all required features
-    all_features = numerical_features + categorical_features
-    missing_features = [f for f in all_features if f not in X.columns]
-    if missing_features:
-        st.error(f"Error: The following required features are missing from your dataset: {', '.join(missing_features)}. Please ensure your '{CSV_FILE_PATH}' contains these columns.")
-        return None, None, None, None
+    preprocessor = ColumnTransformer([
+        ('num', StandardScaler(), numerical_features),
+        ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_features)
+    ])
 
-    # Create a preprocessor
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', StandardScaler(), numerical_features),
-            ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_features)
-        ],
-        remainder='passthrough' # Keep other columns if any, though not expected here
-    )
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
 
-    # Split data before training
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-    
-    # --- Create an XGBoost Pipeline with SMOTE for handling imbalance ---
-    xgb_pipeline = ImbPipeline(steps=[
+    pipeline = ImbPipeline(steps=[
         ('preprocessor', preprocessor),
         ('smote', SMOTE(random_state=42)),
-        # Removed use_label_encoder=False as it's deprecated and not needed with eval_metric
-        ('classifier', XGBClassifier(eval_metric='logloss', random_state=42)) 
+        ('classifier', XGBClassifier(eval_metric='logloss', random_state=42))
     ])
-    
-    # --- Hyperparameter Tuning with GridSearchCV ---
-    # Define a focused parameter grid for efficient tuning
+
     param_grid = {
         'classifier__n_estimators': [100, 200],
         'classifier__max_depth': [3, 5],
         'classifier__learning_rate': [0.1]
     }
 
-    # Grid search with cross-validation. n_jobs=1 is more stable for deployment.
-    grid_search = GridSearchCV(xgb_pipeline, param_grid, cv=3, scoring='roc_auc', n_jobs=1, verbose=0)
-    
+    grid = GridSearchCV(pipeline, param_grid, cv=3, scoring='roc_auc', n_jobs=1)
     try:
-        grid_search.fit(X_train, y_train)
+        grid.fit(X_train, y_train)
+        return grid.best_estimator_, X_test, y_test, X_train, preprocessor
     except Exception as e:
-        st.error(f"An error occurred during model training (GridSearchCV fit): {e}")
-        st.info("This might be due to issues with data preprocessing or feature consistency. Please ensure your dataset matches the expected features.")
-        return None, None, None, None
-    
-    # The best pipeline found by the grid search
-    best_pipeline = grid_search.best_estimator_
-    
-    return best_pipeline, X_test, y_test, X_train
+        st.error(f"Model training failed: {e}")
+        return None, None, None, None, None
 
-# --- Plotting Functions ---
 def plot_model_performance(y_test, y_pred, y_proba):
-    """Plots confusion matrix and ROC curve."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 6))
+    """Plot confusion matrix and ROC curve"""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     
-    sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt='d', ax=ax1, cmap='Blues')
+    # Confusion Matrix
+    cm = confusion_matrix(y_test, y_pred)
+    sns.heatmap(cm, annot=True, fmt='d', ax=ax1, cmap='Blues')
     ax1.set_title('Confusion Matrix')
-    ax1.set_xlabel('Predicted'); ax1.set_ylabel('Actual')
+    ax1.set_xlabel('Predicted')
+    ax1.set_ylabel('Actual')
 
+    # ROC Curve
     fpr, tpr, _ = roc_curve(y_test, y_proba)
     auc_score = roc_auc_score(y_test, y_proba)
-    ax2.plot(fpr, tpr, label=f'XGBoost (AUC = {auc_score:.3f})')
-    ax2.plot([0, 1], [0, 1], 'k--')
-    ax2.set_xlabel('False Positive Rate'); ax2.set_ylabel('True Positive Rate')
-    ax2.set_title('ROC Curve'); ax2.legend()
-    
-    st.pyplot(fig)
-    plt.close(fig) # Close the figure to free memory
+    ax2.plot(fpr, tpr, label=f'AUC = {auc_score:.3f}', linewidth=2)
+    ax2.plot([0, 1], [0, 1], 'k--', linewidth=1)
+    ax2.set_title('ROC Curve')
+    ax2.set_xlabel('False Positive Rate')
+    ax2.set_ylabel('True Positive Rate')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
 
-# --- Main App ---
+    st.pyplot(fig)
+    plt.close(fig)
+
+def plot_shap_explanation(pipeline, X_test, customer_idx):
+    """Create SHAP explanation plot for a specific customer"""
+    try:
+        preprocessor = pipeline.named_steps['preprocessor']
+        model = pipeline.named_steps['classifier']
+        
+        # Transform the data
+        X_transformed = preprocessor.transform(X_test)
+        
+        # Create explainer
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(X_transformed)
+        
+        # Get feature names
+        feature_names = preprocessor.get_feature_names_out()
+        
+        # Create waterfall plot for the selected customer
+        fig, ax = plt.subplots(figsize=(12, 8))
+        
+        # Use waterfall plot instead of force plot for better compatibility
+        shap_exp = shap.Explanation(
+            values=shap_values[customer_idx],
+            base_values=explainer.expected_value,
+            data=X_transformed[customer_idx],
+            feature_names=feature_names
+        )
+        
+        shap.waterfall_plot(shap_exp, show=False)
+        plt.tight_layout()
+        
+        st.pyplot(fig)
+        plt.close(fig)
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"Error creating SHAP explanation: {e}")
+        return False
+
+# Main app
 st.title("🏆 Professional Bank Customer Churn Prediction")
 
-# Load data and train models
-df = load_data(CSV_FILE_PATH)
+# File uploader
+uploaded_file = st.file_uploader("Upload your CSV file (optional)", type=['csv'])
+
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    st.success("CSV file uploaded successfully!")
+else:
+    st.info("No file uploaded. Using sample data for demonstration.")
+    df = load_data()
 
 if df is not None:
-    with st.spinner("Training advanced models with hyperparameter tuning... This may take a few minutes."):
-        pipeline, X_test, y_test, X_train = train_model(df)
+    # Display dataset info
+    st.subheader("Dataset Overview")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Customers", len(df))
+    with col2:
+        st.metric("Churned Customers", df['Exited'].sum())
+    with col3:
+        st.metric("Churn Rate", f"{df['Exited'].mean():.2%}")
+    
+    # Train model
+    with st.spinner("Training model..."):
+        pipeline, X_test, y_test, X_train, preprocessor = train_model(df)
 
-    if pipeline is not None:
-        tab1, tab2, tab3 = st.tabs(["📊 Model Performance", "🔮 Live Prediction", "🧠 Model Explanation (SHAP)"])
+    if pipeline:
+        tab1, tab2, tab3 = st.tabs(["📊 Model Performance", "🔮 Live Prediction", "🧠 SHAP Explanation"])
 
         with tab1:
-            st.header("Tuned XGBoost Model Performance")
-            
+            st.header("Model Performance Metrics")
             y_pred = pipeline.predict(X_test)
             y_proba = pipeline.predict_proba(X_test)[:, 1]
 
+            # Metrics
             col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Accuracy", f"{accuracy_score(y_test, y_pred):.2%}")
-            col2.metric("AUC Score", f"{roc_auc_score(y_test, y_proba):.3f}")
-            col3.metric("Precision", f"{precision_score(y_test, y_pred):.2%}")
-            col4.metric("Recall", f"{recall_score(y_test, y_pred):.2%}")
-            
-            st.info(f"**Best Hyperparameters Found:** `{pipeline.named_steps['classifier'].get_params()}`")
-            
+            with col1:
+                st.metric("Accuracy", f"{accuracy_score(y_test, y_pred):.2%}")
+            with col2:
+                st.metric("AUC Score", f"{roc_auc_score(y_test, y_proba):.3f}")
+            with col3:
+                st.metric("Precision", f"{precision_score(y_test, y_pred):.2%}")
+            with col4:
+                st.metric("Recall", f"{recall_score(y_test, y_pred):.2%}")
+
             st.markdown("---")
             plot_model_performance(y_test, y_pred, y_proba)
 
         with tab2:
-            st.header("🔮 Predict Churn for a New Customer")
+            st.header("Live Churn Prediction")
+            
             with st.form("prediction_form"):
-                credit_score = st.slider("Credit Score", 300, 850, 650)
-                geography = st.selectbox("Geography", df['Geography'].unique())
-                gender = st.selectbox("Gender", df['Gender'].unique())
-                age = st.slider("Age", 18, 100, 35)
-                tenure = st.slider("Tenure (years)", 0, 10, 5)
-                balance = st.slider("Balance", 0.0, 250000.0, 0.0)
-                # Re-added inputs for 'NumOfProducts', 'HasCrCard', 'IsActiveMember'
-                num_of_products = st.selectbox("Number of Products", [1, 2, 3, 4]) # Assuming common product counts
-                has_cr_card = st.selectbox("Has Credit Card?", [0, 1], format_func=lambda x: 'Yes' if x == 1 else 'No')
-                is_active_member = st.selectbox("Is Active Member?", [0, 1], format_func=lambda x: 'Yes' if x == 1 else 'No')
-                estimated_salary = st.slider("Estimated Salary", 0.0, 200000.0, 50000.0)
+                col1, col2 = st.columns(2)
                 
-                submitted = st.form_submit_button("Predict Churn")
+                with col1:
+                    credit_score = st.slider("Credit Score", 300, 850, 650)
+                    geography = st.selectbox("Geography", df['Geography'].unique())
+                    gender = st.selectbox("Gender", df['Gender'].unique())
+                    age = st.slider("Age", 18, 100, 35)
+                
+                with col2:
+                    tenure = st.slider("Tenure (Years)", 0, 10, 5)
+                    balance = st.slider("Balance ($)", 0.0, 250000.0, 0.0)
+                    estimated_salary = st.slider("Estimated Salary ($)", 0.0, 200000.0, 50000.0)
+                
+                submitted = st.form_submit_button("🔮 Predict Churn Risk", use_container_width=True)
 
             if submitted:
-                # Re-added these features to input_data
-                input_data = pd.DataFrame({
-                    'CreditScore': [credit_score], 'Geography': [geography], 'Gender': [gender],
-                    'Age': [age], 'Tenure': [tenure], 'Balance': [balance],
-                    'NumOfProducts': [num_of_products], 'HasCrCard': [has_cr_card],
-                    'IsActiveMember': [is_active_member], 'EstimatedSalary': [estimated_salary]
+                input_df = pd.DataFrame({
+                    'CreditScore': [credit_score],
+                    'Geography': [geography],
+                    'Gender': [gender],
+                    'Age': [age],
+                    'Tenure': [tenure],
+                    'Balance': [balance],
+                    'EstimatedSalary': [estimated_salary]
                 })
-                churn_proba = pipeline.predict_proba(input_data)[0, 1]
                 
-                st.subheader("Prediction Result")
-                if churn_proba > 0.5:
-                    st.error(f"High Churn Risk ({churn_proba:.2%})")
+                pred_proba = pipeline.predict_proba(input_df)[0, 1]
+                
+                # Display prediction with color coding
+                if pred_proba > 0.5:
+                    st.error(f"🚨 High Churn Risk: {pred_proba:.2%}")
+                    st.write("**Recommendation:** Immediate intervention required!")
+                elif pred_proba > 0.3:
+                    st.warning(f"⚠️ Medium Churn Risk: {pred_proba:.2%}")
+                    st.write("**Recommendation:** Monitor closely and consider retention strategies.")
                 else:
-                    st.success(f"Low Churn Risk ({churn_proba:.2%})")
+                    st.success(f"✅ Low Churn Risk: {pred_proba:.2%}")
+                    st.write("**Recommendation:** Customer is likely to stay.")
 
         with tab3:
-            st.header("🧠 Explaining Predictions with SHAP")
-            st.write("Please note: SHAP value calculation can be computationally intensive.")
-            with st.spinner("Calculating SHAP values... This may take a moment."):
-                preprocessor = pipeline.named_steps['preprocessor']
-                model = pipeline.named_steps['classifier']
-                
-                # Transform X_test to get data in the format expected by SHAP explainer
-                X_test_transformed = preprocessor.transform(X_test)
-                
-                # Get feature names after preprocessing (including one-hot encoded categories)
-                # This is crucial for SHAP plots to display correct feature names
-                feature_names = preprocessor.get_feature_names_out()
-
-                explainer = shap.TreeExplainer(model)
-                shap_values = explainer.shap_values(X_test_transformed)
-
-            st.subheader("Individual Prediction Explanation")
-            st.write("Select a customer from the test set to see a detailed breakdown of their prediction.")
+            st.header("SHAP Model Explanation")
             
-            # Create a mapping from original index to a displayable label
-            display_indices = {idx: f"Customer {idx} (Actual Churn: {'Yes' if y_test.loc[idx] == 1 else 'No'})" for idx in X_test.index}
-            selected_display_label = st.selectbox("Select a customer to explain:", options=list(display_indices.values()))
-            
-            # Get the actual index back from the display label
-            selected_idx = None
-            for original_idx, label in display_indices.items():
-                if label == selected_display_label:
-                    selected_idx = original_idx
-                    break
-
-            if selected_idx is not None:
-                # Get the position of the selected index in the X_test DataFrame
-                idx_pos = X_test.index.get_loc(selected_idx)
+            if len(X_test) > 0:
+                st.subheader("Feature Importance for Individual Predictions")
                 
-                st.write("The plot below shows how each feature contributed to the final prediction. Red features increase churn risk, blue features decrease it.")
+                # Customer selection
+                n_customers = min(10, len(X_test))
+                customer_options = [f"Customer {i+1}" for i in range(n_customers)]
+                selected_customer = st.selectbox("Select a customer for detailed explanation:", customer_options)
                 
-                # Generate the plot with Matplotlib and display it with st.pyplot
-                fig_force, ax_force = plt.subplots(figsize=(10, 6)) # Adjust figure size for better display
+                customer_idx = customer_options.index(selected_customer)
                 
-                # Ensure the input to force_plot is a DataFrame with correct column names
-                shap.force_plot(
-                    explainer.expected_value,
-                    shap_values[idx_pos,:],
-                    pd.DataFrame(X_test_transformed[idx_pos,:].reshape(1, -1), columns=feature_names),
-                    matplotlib=True,
-                    show=False,
-                    ax=ax_force # Pass the axes object
-                )
+                # Show customer details
+                customer_data = X_test.iloc[customer_idx]
+                actual_churn = y_test.iloc[customer_idx]
+                predicted_prob = pipeline.predict_proba(X_test.iloc[[customer_idx]])[0, 1]
                 
-                st.pyplot(fig_force, bbox_inches='tight')
-                plt.close(fig_force) # Close the figure to free memory
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Customer Details:**")
+                    for feature, value in customer_data.items():
+                        st.write(f"- {feature}: {value}")
+                
+                with col2:
+                    st.write("**Prediction Results:**")
+                    st.write(f"- Predicted Churn Probability: {predicted_prob:.2%}")
+                    st.write(f"- Actual Outcome: {'Churned' if actual_churn else 'Retained'}")
+                    prediction_correct = (predicted_prob > 0.5) == actual_churn
+                    st.write(f"- Prediction Correct: {'✅ Yes' if prediction_correct else '❌ No'}")
+                
+                st.markdown("---")
+                
+                # Generate SHAP explanation
+                if st.button("Generate SHAP Explanation"):
+                    with st.spinner("Generating explanation..."):
+                        success = plot_shap_explanation(pipeline, X_test, customer_idx)
+                        if success:
+                            st.success("SHAP explanation generated successfully!")
+            else:
+                st.error("No test data available for SHAP explanation.")
     else:
-        st.error("Model training failed. Please check the data and logs.")
+        st.error("Failed to train the model. Please check your data and try again.")
+else:
+    st.error("No data available. Please upload a CSV file or check the sample data generation.")
