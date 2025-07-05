@@ -10,8 +10,8 @@ import warnings
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from imblearn.pipeline import Pipeline as ImbPipeline
-from imblearn.over_sampling import SMOTE
+from sklearn.pipeline import Pipeline
+from sklearn.utils.class_weight import compute_class_weight
 from xgboost import XGBClassifier
 from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score, accuracy_score, precision_score, recall_score
 from sklearn.inspection import permutation_importance
@@ -96,16 +96,25 @@ def train_model(df):
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
 
-    pipeline = ImbPipeline(steps=[
+    # Calculate class weights to handle imbalanced data
+    classes = np.unique(y_train)
+    class_weights = compute_class_weight('balanced', classes=classes, y=y_train)
+    class_weight_dict = dict(zip(classes, class_weights))
+    
+    # Create pipeline with class weight balancing
+    pipeline = Pipeline(steps=[
         ('preprocessor', preprocessor),
-        ('smote', SMOTE(random_state=42)),
-        ('classifier', XGBClassifier(eval_metric='logloss', random_state=42))
+        ('classifier', XGBClassifier(
+            eval_metric='logloss', 
+            random_state=42,
+            scale_pos_weight=class_weight_dict[1]/class_weight_dict[0]  # Handle imbalanced data
+        ))
     ])
 
     param_grid = {
         'classifier__n_estimators': [100, 200],
         'classifier__max_depth': [3, 5],
-        'classifier__learning_rate': [0.1]
+        'classifier__learning_rate': [0.1, 0.2]
     }
 
     grid = GridSearchCV(pipeline, param_grid, cv=3, scoring='roc_auc', n_jobs=1)
@@ -233,17 +242,44 @@ else:
 if df is not None:
     # Display dataset info
     st.subheader("Dataset Overview")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Total Customers", len(df))
     with col2:
         st.metric("Churned Customers", df['Exited'].sum())
     with col3:
         st.metric("Churn Rate", f"{df['Exited'].mean():.2%}")
+    with col4:
+        balance_ratio = df['Exited'].value_counts()
+        st.metric("Class Balance", f"{balance_ratio[0]}:{balance_ratio[1]}")
+    
+    # Show class distribution
+    st.subheader("Class Distribution")
+    fig, ax = plt.subplots(1, 1, figsize=(8, 4))
+    df['Exited'].value_counts().plot(kind='bar', ax=ax, color=['lightblue', 'lightcoral'])
+    ax.set_title('Customer Churn Distribution')
+    ax.set_xlabel('Customer Status')
+    ax.set_ylabel('Count')
+    ax.set_xticklabels(['Retained (0)', 'Churned (1)'], rotation=0)
+    for i, v in enumerate(df['Exited'].value_counts()):
+        ax.text(i, v + 10, str(v), ha='center', va='bottom')
+    st.pyplot(fig)
+    plt.close(fig)
     
     # Train model
-    with st.spinner("Training model..."):
+    st.subheader("Model Training")
+    with st.spinner("Training XGBoost model with class balancing..."):
         pipeline, X_test, y_test, X_train, preprocessor = train_model(df)
+    
+    if pipeline:
+        st.success("✅ Model trained successfully!")
+        
+        # Display model info
+        model_info = pipeline.named_steps['classifier']
+        st.info(f"**Model Details**: XGBoost Classifier with {model_info.n_estimators} estimators, "
+                f"max depth: {model_info.max_depth}, learning rate: {model_info.learning_rate}")
+        
+        st.markdown("---")
 
     if pipeline:
         tab1, tab2, tab3 = st.tabs(["📊 Model Performance", "🔮 Live Prediction", "🧠 Feature Analysis"])
