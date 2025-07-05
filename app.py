@@ -4,10 +4,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 import warnings
-from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
@@ -17,7 +15,6 @@ from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score, accuracy
 from sklearn.inspection import permutation_importance
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 warnings.filterwarnings("ignore")
 
@@ -241,19 +238,25 @@ def create_sample_data():
         'Age': np.random.randint(18, 80, n_samples),
         'Tenure': np.random.randint(0, 10, n_samples),
         'Balance': np.random.uniform(0, 250000, n_samples),
+        'NumOfProducts': np.random.randint(1, 4, n_samples), # Added a new feature for more realism
+        'HasCrCard': np.random.choice([0, 1], n_samples),
+        'IsActiveMember': np.random.choice([0, 1], n_samples),
         'EstimatedSalary': np.random.uniform(0, 200000, n_samples),
     }
 
     df = pd.DataFrame(data)
 
+    # Make churn prediction more realistic
     prob_adjustments = (
-        (df['Age'] > 50) * 0.15 +
-        (df['Balance'] == 0) * 0.2 +
-        (df['CreditScore'] < 600) * 0.15 +
-        (df['Tenure'] <= 1) * 0.1
+        (df['Age'] > 45) * 0.15 + # Older customers more likely
+        (df['Balance'] == 0) * 0.2 + # Zero balance more likely
+        (df['CreditScore'] < 600) * 0.15 + # Low credit score more likely
+        (df['Tenure'] <= 1) * 0.1 + # New customers more likely
+        (df['NumOfProducts'] > 1) * -0.05 + # More products, less likely
+        (df['IsActiveMember'] == 0) * 0.1 # Inactive members more likely
     )
 
-    final_prob = np.clip(0.2 + prob_adjustments, 0, 0.8)
+    final_prob = np.clip(0.2 + prob_adjustments, 0.05, 0.8) # Ensure probabilities are within a reasonable range
     df['Exited'] = np.random.binomial(1, final_prob)
 
     return df
@@ -264,9 +267,25 @@ def load_data(path=None):
     if path:
         try:
             df = pd.read_csv(path)
-            required_cols = ['CreditScore', 'Geography', 'Gender', 'Age', 'Tenure', 'Balance', 'EstimatedSalary', 'Exited']
-            if not all(col in df.columns for col in required_cols):
-                st.error(f"Uploaded CSV must contain all required columns: {', '.join(required_cols)}. Using sample data.")
+            # Define required columns, excluding 'Exited' as it's the target
+            # Ensure these columns exist for prediction.
+            required_cols_for_prediction = [
+                'CreditScore', 'Geography', 'Gender', 'Age', 'Tenure',
+                'Balance', 'NumOfProducts', 'HasCrCard', 'IsActiveMember', 'EstimatedSalary'
+            ]
+            
+            # Check if all prediction features are present and 'Exited' column for training is present
+            if not all(col in df.columns for col in required_cols_for_prediction) or 'Exited' not in df.columns:
+                missing_features = [col for col in required_cols_for_prediction if col not in df.columns]
+                missing_target = "'Exited'" if 'Exited' not in df.columns else ""
+                
+                error_msg = f"Uploaded CSV is missing required columns for training/prediction: "
+                if missing_features:
+                    error_msg += f"Features: {', '.join(missing_features)}. "
+                if missing_target:
+                    error_msg += f"Target: {missing_target}."
+                
+                st.error(f"{error_msg} Using sample data.")
                 return create_sample_data()
             return df
         except Exception as e:
@@ -308,8 +327,8 @@ def train_model(df):
         class_weights = compute_class_weight('balanced', classes=classes, y=y_train)
         scale_pos_weight_val = class_weights[1] / class_weights[0]
     else:
-        st.warning("Cannot compute class weights: one of the target classes (0 or 1) is missing in the training data.")
-        scale_pos_weight_val = 1
+        st.warning("Cannot compute class weights: one of the target classes (0 or 1) is missing in the training data. Setting scale_pos_weight to 1.")
+        scale_pos_weight_val = 1 # Default to 1 if not balanced or only one class
 
     pipeline = Pipeline(steps=[
         ('preprocessor', preprocessor),
@@ -337,12 +356,20 @@ def train_model(df):
 
 def create_enhanced_metrics_display(y_test, y_pred, y_proba):
     """Create enhanced metrics display with plotly"""
+    # Handle cases where y_pred might be all one class (e.g., if model is very biased)
+    # This can cause precision/recall/f1 to be undefined.
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, zero_division=0) # Set zero_division to 0
+    recall = recall_score(y_test, y_pred, zero_division=0)
+    f1 = f1_score(y_test, y_pred, zero_division=0)
+    auc_score = roc_auc_score(y_test, y_proba)
+
     metrics = {
-        'Accuracy': accuracy_score(y_test, y_pred),
-        'Precision': precision_score(y_test, y_pred),
-        'Recall': recall_score(y_test, y_pred),
-        'F1 Score': f1_score(y_test, y_pred),
-        'AUC Score': roc_auc_score(y_test, y_proba)
+        'Accuracy': accuracy,
+        'Precision': precision,
+        'Recall': recall,
+        'F1 Score': f1,
+        'AUC Score': auc_score
     }
 
     # Create radar chart for metrics
@@ -448,42 +475,72 @@ def create_feature_importance_chart(pipeline, X_test, y_test):
     """Create interactive feature importance chart"""
     try:
         preprocessor = pipeline.named_steps['preprocessor']
-        preprocessor.fit(X_test)
+        
+        # We need to fit the preprocessor on the training data's columns to get consistent feature names
+        # when transforming X_test. If X_test has different column order or missing columns, this helps.
+        # However, for permutation importance, the classifier needs to be fit on the preprocessed X_train data.
+        # The best way to get feature names is from the preprocessor after it has seen the training data.
+        
+        # It's better to get feature names from the preprocessor fitted on X_train during the train_model process.
+        # But for permutation importance, we pass X_test through the *pipeline*, which handles preprocessing.
+        # We need the feature names *after* preprocessing to map back importance scores.
+
+        # Ensure preprocessor is fitted (it should be as part of the pipeline during GridSearchCV fit)
+        # We need original feature names from X_test to ensure consistent mapping.
+        original_feature_names = X_test.columns.tolist() # Use original feature names from X_test for consistency
+        
+        # Get feature names out from the preprocessor after transform (which handles one-hot encoding)
+        # We'll use a dummy dataframe for this to ensure correct order/naming
+        dummy_df = pd.DataFrame(columns=original_feature_names)
+        dummy_transformed = preprocessor.fit_transform(dummy_df) # Fit on dummy to get all possible output feature names
         all_feature_names = preprocessor.get_feature_names_out()
 
+        # The classifier expects the preprocessed data, so we'll transform X_test first
         X_test_transformed = preprocessor.transform(X_test)
+        
+        # Identify features with non-zero variance in the transformed data for permutation importance
+        # This prevents errors if a one-hot encoded column, for example, has no variance in the test set.
         variances = np.var(X_test_transformed, axis=0)
-        non_zero_variance_mask = variances > 1e-10
-
+        non_zero_variance_mask = variances > 1e-10 # Use a small epsilon to avoid floating point issues
+        
+        # Filter both the transformed data and the feature names
         X_test_filtered = X_test_transformed[:, non_zero_variance_mask]
         feature_names_filtered = all_feature_names[non_zero_variance_mask]
-
+        
         classifier = pipeline.named_steps['classifier']
+        
+        # Permutation importance directly on the classifier with the preprocessed data
         perm_importance = permutation_importance(
             classifier, X_test_filtered, y_test,
-            n_repeats=10, random_state=42, n_jobs=1
+            n_repeats=10, random_state=42, n_jobs=1,
+            scoring='roc_auc' # Use a relevant scoring metric for classification
         )
-
-        # Clean feature names
+        
+        # Clean feature names for display
         cleaned_names = []
         for feature in feature_names_filtered:
             if feature.startswith('num__'):
                 cleaned_names.append(feature.replace('num__', ''))
             elif feature.startswith('cat__'):
-                cleaned_names.append(feature.replace('cat__', '').replace('_', ' ').title())
+                # Extract the category name (e.g., 'Geography_France' -> 'Geography: France')
+                parts = feature.replace('cat__', '').split('_')
+                if len(parts) > 1:
+                    cleaned_names.append(f"{parts[0].title()}: {parts[1].title()}")
+                else:
+                    cleaned_names.append(feature.replace('cat__', '').title()) # Fallback for single word cat
             else:
                 cleaned_names.append(feature.replace('_', ' ').title())
-
+        
         # Create DataFrame
         importance_df = pd.DataFrame({
             'feature': cleaned_names,
             'importance': perm_importance.importances_mean,
             'std': perm_importance.importances_std
         }).sort_values('importance', ascending=True)
-
+        
         # Create plotly bar chart
         fig = go.Figure()
-
+        
         fig.add_trace(go.Bar(
             x=importance_df['importance'],
             y=importance_df['feature'],
@@ -498,7 +555,7 @@ def create_feature_importance_chart(pipeline, X_test, y_test):
             text=[f'{val:.4f}' for val in importance_df['importance']],
             textposition='outside'
         ))
-
+        
         fig.update_layout(
             title={
                 'text': "Feature Importance Analysis",
@@ -506,14 +563,14 @@ def create_feature_importance_chart(pipeline, X_test, y_test):
                 'xanchor': 'center',
                 'font': {'size': 20}
             },
-            xaxis_title="Permutation Importance",
+            xaxis_title="Permutation Importance (AUC Score Drop)",
             yaxis_title="Features",
             height=max(600, len(importance_df) * 30),
             showlegend=False
         )
-
+        
         return fig, importance_df
-
+        
     except Exception as e:
         st.error(f"Error creating feature importance chart: {e}")
         return None, None
@@ -527,9 +584,10 @@ def create_data_explorer_charts(df):
         df, x='Age', color='Exited',
         title='Age Distribution by Churn Status',
         nbins=20,
-        color_discrete_map={0: '#48dbfb', 1: '#ff6b6b'}
+        color_discrete_map={0: '#48dbfb', 1: '#ff6b6b'},
+        hover_data={'Age': ':.0f', 'Exited': True}
     )
-    fig_age.update_layout(height=400)
+    fig_age.update_layout(height=400, showlegend=True)
     charts['age'] = fig_age
 
     # Balance distribution
@@ -537,9 +595,10 @@ def create_data_explorer_charts(df):
         df, x='Exited', y='Balance',
         title='Balance Distribution by Churn Status',
         color='Exited',
-        color_discrete_map={0: '#48dbfb', 1: '#ff6b6b'}
+        color_discrete_map={0: '#48dbfb', 1: '#ff6b6b'},
+        hover_data={'Balance': ':.2f'}
     )
-    fig_balance.update_layout(height=400)
+    fig_balance.update_layout(height=400, showlegend=True)
     charts['balance'] = fig_balance
 
     # Geography distribution
@@ -547,14 +606,19 @@ def create_data_explorer_charts(df):
     fig_geo = px.bar(
         geography_counts, x='Geography', y='count', color='Exited',
         title='Churn Distribution by Geography',
-        color_discrete_map={0: '#48dbfb', 1: '#ff6b6b'}
+        color_discrete_map={0: '#48dbfb', 1: '#ff6b6b'},
+        barmode='group',
+        text_auto=True # Display counts on bars
     )
-    fig_geo.update_layout(height=400)
+    fig_geo.update_layout(height=400, showlegend=True)
     charts['geography'] = fig_geo
 
     # Correlation heatmap
     numeric_df = df.select_dtypes(include=[np.number])
-    correlation_matrix = numeric_df.corr()
+    if 'Exited' in numeric_df.columns: # Ensure 'Exited' is in numeric_df for correlation
+        correlation_matrix = numeric_df.corr()
+    else:
+        correlation_matrix = numeric_df.corr() # Fallback if Exited not in numeric for some reason
 
     fig_corr = go.Figure(data=go.Heatmap(
         z=correlation_matrix.values,
@@ -564,7 +628,8 @@ def create_data_explorer_charts(df):
         zmid=0,
         text=correlation_matrix.values,
         texttemplate="%{text:.2f}",
-        textfont={"size": 10}
+        textfont={"size": 10},
+        hoverongaps=False
     ))
 
     fig_corr.update_layout(
@@ -575,33 +640,50 @@ def create_data_explorer_charts(df):
 
     return charts
 
-def analyze_customer_prediction(pipeline, customer_data, feature_names):
+def analyze_customer_prediction(pipeline, customer_data, X_train_original_columns):
     """Analyze why a customer was predicted to churn or not"""
     try:
-        pred_proba = pipeline.predict_proba(customer_data)[0, 1]
-        pred_class = pipeline.predict(customer_data)[0]
+        # Ensure customer_data has all columns present in X_train for the preprocessor
+        # and in the correct order. Fill missing columns with default/0.
+        customer_data_aligned = pd.DataFrame(columns=X_train_original_columns)
+        for col in X_train_original_columns:
+            if col in customer_data.columns:
+                customer_data_aligned[col] = customer_data[col]
+            else:
+                # Handle missing columns: numerical to 0, categorical to first category or 'Unknown'
+                if col in pipeline.named_steps['preprocessor'].named_transformers_['num'].get_feature_names_out().tolist():
+                    customer_data_aligned[col] = 0.0 # Default numerical to 0
+                elif col in pipeline.named_steps['preprocessor'].named_transformers_['cat'].get_feature_names_out().tolist():
+                     # This is tricky for OHE. It's better to ensure the input form captures all expected categories.
+                     # For demonstration, we'll assume the selectboxes cover all trained categories.
+                     # If a specific category column created by OHE is missing, its value will be 0.
+                     pass # Handled by the pd.DataFrame(columns=...) creating NaNs, then transform will handle it.
+                else:
+                    customer_data_aligned[col] = np.nan # Or a suitable default value
+
+        # The preprocessor expects all columns from X_train
+        customer_data_for_prediction = customer_data_aligned.iloc[0:1] # Take only the first row
+        
+        pred_proba = pipeline.predict_proba(customer_data_for_prediction)[0, 1]
+        pred_class = pipeline.predict(customer_data_for_prediction)[0]
 
         model = pipeline.named_steps['classifier']
+        preprocessor = pipeline.named_steps['preprocessor']
+
+        # Get feature importances from the tree model
         model_feature_importance = model.feature_importances_
 
-        preprocessor = pipeline.named_steps['preprocessor']
-        transformed_data = preprocessor.transform(customer_data)
-
+        # Get the names of the features AFTER preprocessing
         preprocessor_feature_names = preprocessor.get_feature_names_out()
 
-        if len(preprocessor_feature_names) != len(model_feature_importance):
-            min_len = min(len(preprocessor_feature_names), len(model_feature_importance))
-            preprocessor_feature_names = preprocessor_feature_names[:min_len]
-            model_feature_importance = model_feature_importance[:min_len]
-            transformed_data = transformed_data[:, :min_len]
-
+        # Create analysis DataFrame
         analysis_df = pd.DataFrame({
             'feature': preprocessor_feature_names,
-            'value': transformed_data[0],
             'importance': model_feature_importance
         })
-
-        analysis_df = analysis_df.sort_values('importance', ascending=False)
+        
+        # Sort by importance
+        analysis_df = analysis_df.sort_values('importance', ascending=False).reset_index(drop=True)
 
         return pred_proba, pred_class, analysis_df
 
@@ -619,15 +701,21 @@ def create_individual_analysis_chart(analysis_df):
         if feature.startswith('num__'):
             cleaned_names.append(feature.replace('num__', ''))
         elif feature.startswith('cat__'):
-            cleaned_names.append(feature.replace('cat__', '').replace('_', ' ').title())
+            parts = feature.replace('cat__', '').split('_')
+            if len(parts) > 1:
+                cleaned_names.append(f"{parts[0].title()}: {parts[1].title()}")
+            else:
+                cleaned_names.append(feature.replace('cat__', '').title())
         else:
             cleaned_names.append(feature.replace('_', ' ').title())
 
+    top_features['cleaned_feature'] = cleaned_names
+    
     fig = go.Figure()
 
     fig.add_trace(go.Bar(
         x=top_features['importance'],
-        y=cleaned_names,
+        y=top_features['cleaned_feature'],
         orientation='h',
         marker=dict(
             color=top_features['importance'],
@@ -675,7 +763,7 @@ with st.sidebar:
     uploaded_file = st.file_uploader(
         "📁 Upload Customer Data",
         type=['csv'],
-        help="Upload a CSV file with customer data including the required columns"
+        help="Upload a CSV file with customer data including the required columns (CreditScore, Geography, Gender, Age, Tenure, Balance, NumOfProducts, HasCrCard, IsActiveMember, EstimatedSalary, Exited)"
     )
 
     # Model information section
@@ -694,6 +782,7 @@ with st.sidebar:
         st.session_state.model_trained = False
         st.cache_resource.clear()
         st.cache_data.clear()
+        # Rerun is important to clear cached data/resources and re-execute from top
         st.rerun()
 
 # Initialize session state
@@ -701,6 +790,8 @@ if 'model_trained' not in st.session_state:
     st.session_state.model_trained = False
 if 'pipeline' not in st.session_state:
     st.session_state.pipeline = None
+if 'X_train_cols' not in st.session_state: # To store original X_train columns for prediction alignment
+    st.session_state.X_train_cols = None
 
 if df is not None and not df.empty:
     # Enhanced dataset overview
@@ -736,15 +827,15 @@ if df is not None and not df.empty:
         """, unsafe_allow_html=True)
 
     with col4:
-        balance_ratio = df['Exited'].value_counts()
-        if 0 in balance_ratio and 1 in balance_ratio:
-            ratio_text = f"{balance_ratio[0]}:{balance_ratio[1]}"
+        balance_counts = df['Exited'].value_counts()
+        if 0 in balance_counts and 1 in balance_counts:
+            ratio_text = f"{balance_counts[0]}:{balance_counts[1]}"
         else:
-            ratio_text = "N/A"
+            ratio_text = "N/A (single class)" # Handle case of only one class
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-value">{ratio_text}</div>
-            <div class="metric-label">Class Balance</div>
+            <div class="metric-label">Class Balance (Stay:Churn)</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -756,6 +847,8 @@ if df is not None and not df.empty:
             progress_bar = st.progress(0)
             for i in range(100):
                 progress_bar.progress(i + 1)
+                import time # Simulate training time
+                time.sleep(0.01) # Small sleep for progress bar effect
 
             pipeline, X_test, y_test, X_train, preprocessor = train_model(df)
 
@@ -764,8 +857,8 @@ if df is not None and not df.empty:
             st.session_state.pipeline = pipeline
             st.session_state.X_test = X_test
             st.session_state.y_test = y_test
-            st.session_state.X_train = X_train
-            st.session_state.preprocessor = preprocessor
+            st.session_state.X_train_cols = X_train.columns.tolist() # Store original X_train columns
+            st.session_state.preprocessor = preprocessor # Store preprocessor if needed directly later
             st.session_state.model_trained = True
         else:
             st.error("❌ Model training failed. Please check your data and try again.")
@@ -774,10 +867,9 @@ if df is not None and not df.empty:
     pipeline = st.session_state.get('pipeline')
     X_test = st.session_state.get('X_test')
     y_test = st.session_state.get('y_test')
-    X_train = st.session_state.get('X_train')
-    preprocessor = st.session_state.get('preprocessor')
+    X_train_original_columns = st.session_state.get('X_train_cols') # Use this for consistent input features
 
-    if pipeline and X_test is not None and y_test is not None:
+    if pipeline and X_test is not None and y_test is not None and X_train_original_columns is not None:
         # Display model info in sidebar
         model_info = pipeline.named_steps['classifier']
         with st.sidebar:
@@ -887,7 +979,11 @@ if df is not None and not df.empty:
                 st.markdown("#### 💳 Financial Information")
                 credit_score = st.slider("Credit Score", 300, 850, 650)
                 balance = st.number_input("Account Balance ($)", 0.0, 300000.0, 50000.0)
+                num_products = st.slider("Number of Products", 1, 4, 1)
+                has_cc = st.selectbox("Has Credit Card", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
+                is_active = st.selectbox("Is Active Member", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
                 estimated_salary = st.number_input("Estimated Salary ($)", 0.0, 250000.0, 75000.0)
+
 
             with col2:
                 st.markdown("#### 👤 Personal Information")
@@ -895,6 +991,7 @@ if df is not None and not df.empty:
                 tenure = st.slider("Tenure (years)", 0, 10, 3)
                 geography = st.selectbox("Geography", ['France', 'Spain', 'Germany'])
                 gender = st.selectbox("Gender", ['Male', 'Female'])
+
 
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -907,12 +1004,15 @@ if df is not None and not df.empty:
                     'Age': [age],
                     'Tenure': [tenure],
                     'Balance': [balance],
+                    'NumOfProducts': [num_products],
+                    'HasCrCard': [has_cc],
+                    'IsActiveMember': [is_active],
                     'EstimatedSalary': [estimated_salary]
                 })
 
                 # Make prediction
                 pred_proba, pred_class, analysis_df = analyze_customer_prediction(
-                    pipeline, customer_data, X_train.columns
+                    pipeline, customer_data, X_train_original_columns
                 )
 
                 if pred_proba is not None:
@@ -938,7 +1038,7 @@ if df is not None and not df.empty:
                         # Detailed feature analysis
                         st.markdown("### 📊 Feature Contribution Details")
                         st.dataframe(
-                            analysis_df.head(10)[['feature', 'importance']],
+                            analysis_df.head(10)[['cleaned_feature', 'importance']].rename(columns={'cleaned_feature': 'Feature', 'importance': 'Importance'}),
                             use_container_width=True,
                             hide_index=True
                         )
@@ -951,7 +1051,7 @@ if df is not None and not df.empty:
             batch_file = st.file_uploader(
                 "📁 Upload CSV for Batch Prediction",
                 type=['csv'],
-                help="Upload a CSV file with customer data for batch prediction"
+                help="Upload a CSV file with customer data for batch prediction. It should contain the same columns as the training data, excluding the 'Exited' column."
             )
 
             if batch_file is not None:
@@ -959,15 +1059,52 @@ if df is not None and not df.empty:
                     batch_df = pd.read_csv(batch_file)
                     st.success(f"✅ Loaded {len(batch_df)} customers for prediction")
 
-                    # Display sample data
-                    st.markdown("### 📋 Sample Data")
-                    st.dataframe(batch_df.head(), use_container_width=True)
+                    # --- CRITICAL FIX for IndexError ---
+                    # Ensure the batch_df only contains features expected by the pipeline
+                    # Drop 'Exited' column if it exists in the uploaded batch file
+                    if 'Exited' in batch_df.columns:
+                        st.warning("⚠️ 'Exited' column found in uploaded batch file. It will be ignored for prediction.")
+                        batch_df_for_prediction = batch_df.drop('Exited', axis=1)
+                    else:
+                        batch_df_for_prediction = batch_df.copy() # Use a copy to avoid modifying original df
+
+                    # Ensure columns align with training data before prediction
+                    missing_cols = set(X_train_original_columns) - set(batch_df_for_prediction.columns)
+                    extra_cols = set(batch_df_for_prediction.columns) - set(X_train_original_columns)
+
+                    if missing_cols:
+                        st.warning(f"Batch file is missing columns expected by the model: {', '.join(missing_cols)}. These will be treated as absent (e.g., 0 for numerical, new category for categorical).")
+                        for col in missing_cols:
+                            if col in df.select_dtypes(include=np.number).columns: # Check if it's a numerical feature in original df
+                                batch_df_for_prediction[col] = 0.0 # Fill with 0 for numerical
+                            else: # Assume categorical for others
+                                batch_df_for_prediction[col] = 'Unknown' # Or a specific default category
+
+                    if extra_cols:
+                        st.warning(f"Batch file contains extra columns not used by the model: {', '.join(extra_cols)}. These will be ignored.")
+                        batch_df_for_prediction = batch_df_for_prediction[X_train_original_columns] # Keep only expected columns
+
+                    # Reorder columns to match the training data
+                    batch_df_for_prediction = batch_df_for_prediction[X_train_original_columns]
+
+
+                    # Display sample data used for prediction
+                    st.markdown("### 📋 Sample Data (for prediction)")
+                    st.dataframe(batch_df_for_prediction.head(), use_container_width=True)
 
                     if st.button("🚀 Generate Batch Predictions", use_container_width=True):
                         with st.spinner("🔄 Generating predictions..."):
                             # Make batch predictions
-                            batch_predictions = pipeline.predict_proba(batch_df)[:, 1]
-                            batch_classes = pipeline.predict(batch_df)
+                            proba_output = pipeline.predict_proba(batch_df_for_prediction)
+
+                            # Check if predict_proba returned at least 2 columns
+                            if proba_output.shape[1] > 1:
+                                batch_predictions = proba_output[:, 1]
+                            else:
+                                st.error("Model's predict_proba returned only one column. This might indicate an issue with the model or input data.")
+                                st.stop() # Stop execution to prevent further errors
+
+                            batch_classes = pipeline.predict(batch_df_for_prediction)
 
                             # Add predictions to dataframe
                             batch_df['Churn_Probability'] = batch_predictions
@@ -996,7 +1133,7 @@ if df is not None and not df.empty:
                                 st.metric("Low Risk Customers", low_risk)
 
                             # Download results
-                            csv = batch_df.to_csv(index=False)
+                            csv = batch_df.to_csv(index=False).encode('utf-8') # Ensure encoding
                             st.download_button(
                                 label="📥 Download Predictions",
                                 data=csv,
@@ -1006,7 +1143,8 @@ if df is not None and not df.empty:
                             )
 
                             # Risk distribution chart
-                            risk_counts = batch_df['Risk_Level'].value_counts()
+                            risk_counts = batch_df['Risk_Level'].value_counts().reindex(['Low Risk', 'Medium Risk', 'High Risk'])
+                            risk_counts = risk_counts.fillna(0) # Fill any missing risk levels with 0
                             fig_risk = px.pie(
                                 values=risk_counts.values,
                                 names=risk_counts.index,
@@ -1020,7 +1158,8 @@ if df is not None and not df.empty:
                             st.plotly_chart(fig_risk, use_container_width=True)
 
                 except Exception as e:
-                    st.error(f"❌ Error processing batch file: {e}")
+                    st.error(f"❌ Error processing batch file: {e}. Please ensure your CSV has the correct format and data types.")
+                    st.exception(e) # Show full traceback for more detailed debugging
 
             else:
                 st.info("📁 Please upload a CSV file for batch prediction")
@@ -1034,13 +1173,16 @@ if df is not None and not df.empty:
                     'Age': [35, 45, 28],
                     'Tenure': [3, 7, 1],
                     'Balance': [50000, 75000, 0],
+                    'NumOfProducts': [1, 2, 1],
+                    'HasCrCard': [1, 0, 1],
+                    'IsActiveMember': [1, 1, 0],
                     'EstimatedSalary': [75000, 85000, 60000]
                 })
 
                 st.dataframe(sample_format, use_container_width=True)
 
                 # Download sample format
-                csv_sample = sample_format.to_csv(index=False)
+                csv_sample = sample_format.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Download Sample Format",
                     data=csv_sample,
@@ -1050,7 +1192,7 @@ if df is not None and not df.empty:
                 )
 
     else:
-        st.error("❌ Model training failed. Please check your data and try again.")
+        st.error("❌ Model training failed or no model available. Please check your data and try again.")
 
 else:
     st.error("❌ No data available. Please upload a valid CSV file or check the sample data.")
