@@ -43,8 +43,11 @@ def train_models(df):
     X = df.drop('Exited', axis=1)
     y = df['Exited']
 
+    # --- THIS IS THE FIX ---
+    # Define features based on the columns ACTUALLY in your dataset
     categorical_features = ['Geography', 'Gender']
-    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'NumOfProducts', 'HasCrCard', 'IsActiveMember', 'EstimatedSalary']
+    # Removed 'NumOfProducts', 'HasCrCard', 'IsActiveMember' as they are not in the file
+    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'EstimatedSalary']
 
     preprocessor = ColumnTransformer(
         transformers=[
@@ -118,111 +121,113 @@ st.title("🚀 Advanced Bank Customer Churn Prediction")
 try:
     df = load_data(CSV_FILE_PATH)
     if df is not None:
-        rf_pipeline, xgb_pipeline, X_test, y_test, X_train = train_models(df)
+        # Add a check to ensure all required columns are present after loading
+        required_cols = {'CreditScore', 'Geography', 'Gender', 'Age', 'Tenure', 'Balance', 'EstimatedSalary', 'Exited'}
+        if not required_cols.issubset(df.columns):
+            st.error(f"Data loading failed. Missing required columns. Found: {df.columns.tolist()}")
+        else:
+            rf_pipeline, xgb_pipeline, X_test, y_test, X_train = train_models(df)
 
-        # Create tabs for different sections
-        tab1, tab2, tab3 = st.tabs(["📊 Model Performance", "🔮 Live Prediction", "🧠 Model Explanation (SHAP)"])
+            # Create tabs for different sections
+            tab1, tab2, tab3 = st.tabs(["📊 Model Performance", "🔮 Live Prediction", "🧠 Model Explanation (SHAP)"])
 
-        with tab1:
-            st.header("Comparing Model Performance")
-            st.write("Here we compare the performance of a Random Forest model against a more advanced XGBoost model.")
-            
-            # Make predictions
-            rf_pred = rf_pipeline.predict(X_test)
-            rf_proba = rf_pipeline.predict_proba(X_test)[:, 1]
-            xgb_pred = xgb_pipeline.predict(X_test)
-            xgb_proba = xgb_pipeline.predict_proba(X_test)[:, 1]
+            with tab1:
+                st.header("Comparing Model Performance")
+                st.write("Here we compare the performance of a Random Forest model against a more advanced XGBoost model.")
+                
+                # Make predictions
+                rf_pred = rf_pipeline.predict(X_test)
+                rf_proba = rf_pipeline.predict_proba(X_test)[:, 1]
+                xgb_pred = xgb_pipeline.predict(X_test)
+                xgb_proba = xgb_pipeline.predict_proba(X_test)[:, 1]
 
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("Random Forest")
-                st.metric("Accuracy", f"{accuracy_score(y_test, rf_pred):.2%}")
-                st.metric("AUC Score", f"{roc_auc_score(y_test, rf_proba):.3f}")
-            with col2:
-                st.subheader("XGBoost")
-                st.metric("Accuracy", f"{accuracy_score(y_test, xgb_pred):.2%}")
-                st.metric("AUC Score", f"{roc_auc_score(y_test, xgb_proba):.3f}")
-            
-            st.markdown("---")
-            plot_model_performance(y_test, rf_pred, xgb_pred, rf_proba, xgb_proba)
-            
-            st.markdown("---")
-            st.header("What Drives Churn? (Feature Importance)")
-            plot_feature_importance(rf_pipeline, X_train)
-
-        with tab2:
-            st.header("🔮 Predict Churn for a New Customer")
-            st.write("Enter a customer's details to get a live churn prediction from the best model (XGBoost).")
-
-            with st.form("prediction_form"):
                 col1, col2 = st.columns(2)
                 with col1:
-                    credit_score = st.slider("Credit Score", 300, 850, 650)
-                    geography = st.selectbox("Geography", df['Geography'].unique())
-                    gender = st.selectbox("Gender", df['Gender'].unique())
-                    age = st.slider("Age", 18, 100, 35)
-                    tenure = st.slider("Tenure (years)", 0, 10, 5)
+                    st.subheader("Random Forest")
+                    st.metric("Accuracy", f"{accuracy_score(y_test, rf_pred):.2%}")
+                    st.metric("AUC Score", f"{roc_auc_score(y_test, rf_proba):.3f}")
                 with col2:
-                    balance = st.slider("Balance", 0.0, 250000.0, 0.0)
-                    num_of_products = st.selectbox("Number of Products", [1, 2, 3, 4])
-                    has_cr_card = st.selectbox("Has Credit Card?", [0, 1], format_func=lambda x: 'Yes' if x == 1 else 'No')
-                    is_active_member = st.selectbox("Is Active Member?", [0, 1], format_func=lambda x: 'Yes' if x == 1 else 'No')
-                    estimated_salary = st.slider("Estimated Salary", 0.0, 200000.0, 50000.0)
+                    st.subheader("XGBoost")
+                    st.metric("Accuracy", f"{accuracy_score(y_test, xgb_pred):.2%}")
+                    st.metric("AUC Score", f"{roc_auc_score(y_test, xgb_proba):.3f}")
                 
-                submitted = st.form_submit_button("Predict Churn")
-
-            if submitted:
-                input_data = pd.DataFrame({
-                    'CreditScore': [credit_score], 'Geography': [geography], 'Gender': [gender],
-                    'Age': [age], 'Tenure': [tenure], 'Balance': [balance],
-                    'NumOfProducts': [num_of_products], 'HasCrCard': [has_cr_card],
-                    'IsActiveMember': [is_active_member], 'EstimatedSalary': [estimated_salary]
-                })
-
-                churn_proba = xgb_pipeline.predict_proba(input_data)[0, 1]
+                st.markdown("---")
+                plot_model_performance(y_test, rf_pred, xgb_pred, rf_proba, xgb_proba)
                 
-                st.subheader("Prediction Result")
-                if churn_proba > 0.5:
-                    st.error(f"High Churn Risk ({churn_proba:.2%})")
-                else:
-                    st.success(f"Low Churn Risk ({churn_proba:.2%})")
+                st.markdown("---")
+                st.header("What Drives Churn? (Feature Importance)")
+                plot_feature_importance(rf_pipeline, X_train)
 
-        with tab3:
-            st.header("🧠 Explaining the 'Why' Behind Predictions with SHAP")
-            st.write("SHAP (SHapley Additive exPlanations) helps us understand why the model makes a certain decision. The plot below shows how much each feature contributed to pushing the prediction from the base value to the final output.")
-            
-            # Explain model predictions using SHAP
-            preprocessor = xgb_pipeline.named_steps['preprocessor']
-            model = xgb_pipeline.named_steps['classifier']
-            
-            X_test_transformed = preprocessor.transform(X_test)
-            X_test_transformed_df = pd.DataFrame(X_test_transformed, columns=preprocessor.get_feature_names_out())
-            
-            explainer = shap.TreeExplainer(model)
-            shap_values = explainer.shap_values(X_test_transformed)
+            with tab2:
+                st.header("🔮 Predict Churn for a New Customer")
+                st.write("Enter a customer's details to get a live churn prediction from the best model (XGBoost).")
 
-            st.subheader("SHAP Summary Plot")
-            st.write("This plot shows the most important features for churn prediction across all customers. Features at the top are most important.")
-            fig_shap, ax_shap = plt.subplots()
-            shap.summary_plot(shap_values, X_test_transformed_df, plot_type="bar", show=False)
-            st.pyplot(fig_shap)
-            plt.clf()
+                with st.form("prediction_form"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        credit_score = st.slider("Credit Score", 300, 850, 650)
+                        geography = st.selectbox("Geography", df['Geography'].unique())
+                        gender = st.selectbox("Gender", df['Gender'].unique())
+                        age = st.slider("Age", 18, 100, 35)
+                    with col2:
+                        tenure = st.slider("Tenure (years)", 0, 10, 5)
+                        balance = st.slider("Balance", 0.0, 250000.0, 0.0)
+                        estimated_salary = st.slider("Estimated Salary", 0.0, 200000.0, 50000.0)
+                    
+                    submitted = st.form_submit_button("Predict Churn")
 
-            st.subheader("Individual Prediction Explanation")
-            st.write("Select a customer from the test set to see a detailed breakdown of their prediction.")
-            selected_idx = st.selectbox("Select a customer index to explain:", X_test.index)
-            
-            if selected_idx is not None:
-                shap_values_single = explainer.shap_values(preprocessor.transform(X_test.loc[[selected_idx]]))
+                if submitted:
+                    # --- THIS IS THE FIX ---
+                    # Create DataFrame using only the available columns
+                    input_data = pd.DataFrame({
+                        'CreditScore': [credit_score], 'Geography': [geography], 'Gender': [gender],
+                        'Age': [age], 'Tenure': [tenure], 'Balance': [balance],
+                        'EstimatedSalary': [estimated_salary]
+                    })
+
+                    churn_proba = xgb_pipeline.predict_proba(input_data)[0, 1]
+                    
+                    st.subheader("Prediction Result")
+                    if churn_proba > 0.5:
+                        st.error(f"High Churn Risk ({churn_proba:.2%})")
+                    else:
+                        st.success(f"Low Churn Risk ({churn_proba:.2%})")
+
+            with tab3:
+                st.header("🧠 Explaining the 'Why' Behind Predictions with SHAP")
+                st.write("SHAP (SHapley Additive exPlanations) helps us understand why the model makes a certain decision. The plot below shows how much each feature contributed to pushing the prediction from the base value to the final output.")
                 
-                fig_force, ax_force = plt.subplots()
-                shap.force_plot(explainer.expected_value, shap_values_single, X_test.loc[[selected_idx]], matplotlib=True, show=False)
-                st.pyplot(fig_force)
+                # Explain model predictions using SHAP
+                preprocessor = xgb_pipeline.named_steps['preprocessor']
+                model = xgb_pipeline.named_steps['classifier']
+                
+                X_test_transformed = preprocessor.transform(X_test)
+                X_test_transformed_df = pd.DataFrame(X_test_transformed, columns=preprocessor.get_feature_names_out())
+                
+                explainer = shap.TreeExplainer(model)
+                shap_values = explainer.shap_values(X_test_transformed)
+
+                st.subheader("SHAP Summary Plot")
+                st.write("This plot shows the most important features for churn prediction across all customers. Features at the top are most important.")
+                fig_shap, ax_shap = plt.subplots()
+                shap.summary_plot(shap_values, X_test_transformed_df, plot_type="bar", show=False)
+                st.pyplot(fig_shap)
                 plt.clf()
+
+                st.subheader("Individual Prediction Explanation")
+                st.write("Select a customer from the test set to see a detailed breakdown of their prediction.")
+                selected_idx = st.selectbox("Select a customer index to explain:", X_test.index)
+                
+                if selected_idx is not None:
+                    shap_values_single = explainer.shap_values(preprocessor.transform(X_test.loc[[selected_idx]]))
+                    
+                    fig_force, ax_force = plt.subplots()
+                    shap.force_plot(explainer.expected_value, shap_values_single, X_test.loc[[selected_idx]], matplotlib=True, show=False)
+                    st.pyplot(fig_force)
+                    plt.clf()
 
 
 except FileNotFoundError:
     st.error(f"Error: The data file was not found at '{CSV_FILE_PATH}'. Please make sure the file is in the same folder as the app and has the correct name.")
 except Exception as e:
     st.error(f"An error occurred: {e}")
-
