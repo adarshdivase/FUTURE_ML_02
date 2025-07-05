@@ -223,12 +223,12 @@ try:
                 X_test_transformed_df = pd.DataFrame(X_test_transformed, columns=preprocessor.get_feature_names_out())
                 
                 explainer = shap.TreeExplainer(model)
-                
+                shap_values = explainer.shap_values(X_test_transformed)
+
                 st.subheader("SHAP Summary Plot")
                 st.write("This plot shows the most important features for churn prediction across all customers.")
-                shap_values_summary = explainer.shap_values(X_test_transformed)
                 fig_shap, ax_shap = plt.subplots(figsize=(10, 8))
-                shap.summary_plot(shap_values_summary, X_test_transformed_df, plot_type="bar", show=False)
+                shap.summary_plot(shap_values, X_test_transformed_df, plot_type="bar", show=False)
                 st.pyplot(fig_shap)
                 plt.clf()
 
@@ -247,14 +247,17 @@ try:
                     # 3. Calculate SHAP values for that single 2D instance
                     shap_values_single = explainer.shap_values(X_selected_transformed)
                     
-                    # 4. Create the force plot object, passing the 1D array of SHAP values
+                    # 4. Use the transformed data (as a DataFrame) for the plot features
+                    X_selected_transformed_df = pd.DataFrame(X_selected_transformed, columns=preprocessor.get_feature_names_out())
+                    
+                    # 5. Create the force plot object
                     force_plot = shap.force_plot(
                         explainer.expected_value, 
-                        shap_values_single[0], # Use the first (and only) row of SHAP values
-                        X_test.iloc[[idx_pos]] # Use original features for display
+                        shap_values_single, 
+                        X_selected_transformed_df
                     )
                     
-                    # 5. Render the plot using st.shap
+                    # 6. Render the plot using st.shap
                     st.shap(force_plot, height=200)
 
 
