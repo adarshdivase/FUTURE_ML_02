@@ -27,8 +27,8 @@ st.set_page_config(
 )
 
 # --- Configuration ---
-# Ensure the CSV file is in the same directory as app.py when deploying
-CSV_FILE_PATH = "Customer Churn new.csv"
+# Updated to use the new CSV file
+CSV_FILE_PATH = "customer_churn_cleaned.csv"
 
 # --- Data Loading and Caching ---
 @st.cache_data
@@ -49,7 +49,7 @@ def load_data(path):
         
         return df
     except FileNotFoundError:
-        st.error(f"Error: The data file was not found at '{path}'. Please ensure 'Customer Churn new.csv' is in the same directory as app.py.")
+        st.error(f"Error: The data file was not found at '{path}'. Please ensure '{path}' is in the same directory as app.py.")
         return None
     except Exception as e:
         st.error(f"An error occurred while loading data: {e}")
@@ -69,16 +69,16 @@ def train_model(df):
     X = df.drop('Exited', axis=1)
     y = df['Exited']
 
-    # Define categorical and numerical features based on the columns consistently present in your CSV
-    # Removed 'NumOfProducts', 'HasCrCard', 'IsActiveMember' as they were reported missing
+    # Define categorical and numerical features, re-including previously missing ones
+    # as this is a "cleaned" dataset and aligns with your full feature description.
     categorical_features = ['Geography', 'Gender']
-    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'EstimatedSalary']
+    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'NumOfProducts', 'HasCrCard', 'IsActiveMember', 'EstimatedSalary']
 
     # Check for existence of all required features
     all_features = numerical_features + categorical_features
     missing_features = [f for f in all_features if f not in X.columns]
     if missing_features:
-        st.error(f"Error: The following required features are missing from your dataset: {', '.join(missing_features)}. Please ensure your 'Customer Churn new.csv' contains these columns or adjust the code accordingly.")
+        st.error(f"Error: The following required features are missing from your dataset: {', '.join(missing_features)}. Please ensure your '{CSV_FILE_PATH}' contains these columns.")
         return None, None, None, None
 
     # Create a preprocessor
@@ -182,17 +182,21 @@ if df is not None:
                 age = st.slider("Age", 18, 100, 35)
                 tenure = st.slider("Tenure (years)", 0, 10, 5)
                 balance = st.slider("Balance", 0.0, 250000.0, 0.0)
-                # Removed inputs for 'NumOfProducts', 'HasCrCard', 'IsActiveMember'
+                # Re-added inputs for 'NumOfProducts', 'HasCrCard', 'IsActiveMember'
+                num_of_products = st.selectbox("Number of Products", [1, 2, 3, 4]) # Assuming common product counts
+                has_cr_card = st.selectbox("Has Credit Card?", [0, 1], format_func=lambda x: 'Yes' if x == 1 else 'No')
+                is_active_member = st.selectbox("Is Active Member?", [0, 1], format_func=lambda x: 'Yes' if x == 1 else 'No')
                 estimated_salary = st.slider("Estimated Salary", 0.0, 200000.0, 50000.0)
                 
                 submitted = st.form_submit_button("Predict Churn")
 
             if submitted:
-                # Removed 'NumOfProducts', 'HasCrCard', 'IsActiveMember' from input_data
+                # Re-added these features to input_data
                 input_data = pd.DataFrame({
                     'CreditScore': [credit_score], 'Geography': [geography], 'Gender': [gender],
                     'Age': [age], 'Tenure': [tenure], 'Balance': [balance],
-                    'EstimatedSalary': [estimated_salary]
+                    'NumOfProducts': [num_of_products], 'HasCrCard': [has_cr_card],
+                    'IsActiveMember': [is_active_member], 'EstimatedSalary': [estimated_salary]
                 })
                 churn_proba = pipeline.predict_proba(input_data)[0, 1]
                 
