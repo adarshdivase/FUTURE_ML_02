@@ -159,25 +159,44 @@ def plot_model_performance(y_test, y_pred, y_proba):
 def plot_feature_importance(pipeline, X_test, y_test):
     """Create feature importance plot using permutation importance"""
     try:
+        # Get all feature names from the preprocessor's output
+        preprocessor = pipeline.named_steps['preprocessor']
+        all_feature_names = preprocessor.get_feature_names_out()
+        
         # Calculate permutation importance
         perm_importance = permutation_importance(pipeline, X_test, y_test, n_repeats=10, random_state=42)
         
-        # Get feature names
-        preprocessor = pipeline.named_steps['preprocessor']
-        feature_names = preprocessor.get_feature_names_out()
-        
-        # --- START FIX: Add length check for robustness ---
-        if len(feature_names) != len(perm_importance.importances_mean):
-            st.error(f"Internal Error: Mismatch in feature count for importance plot. "
-                     f"Expected {len(feature_names)} features from preprocessor, "
-                     f"but got {len(perm_importance.importances_mean)} importance values from permutation importance. "
-                     f"This indicates an unexpected issue with feature alignment. Please try reloading the app or contact support.")
-            return None # Exit function to prevent the DataFrame creation error
-        # --- END FIX ---
+        # Check if the number of importance values matches the number of all feature names
+        if len(all_feature_names) != len(perm_importance.importances_mean):
+            # This scenario occurs if permutation_importance implicitly skips features
+            # (e.g., those with zero variance in X_test, like a one-hot encoded category not present in test set).
+            # We need to filter `all_feature_names` to match the length of `importances_mean`.
+            
+            # Transform X_test to identify which features are 'active' (non-constant) in the test set
+            X_test_transformed = preprocessor.transform(X_test)
+            
+            # Create a temporary DataFrame to easily calculate variance and filter
+            temp_transformed_df = pd.DataFrame(X_test_transformed, columns=all_feature_names)
+            
+            # Filter feature names to only include those with non-zero variance in X_test_transformed
+            # Use a small epsilon for floating-point comparisons
+            active_feature_names = [col for col in all_feature_names if temp_transformed_df[col].var() > 1e-9]
+            
+            if len(active_feature_names) != len(perm_importance.importances_mean):
+                # If lengths still don't match after filtering, something more complex is wrong.
+                st.error(f"Internal Error: Mismatch in feature count for importance plot even after filtering for active features. "
+                         f"Preprocessor output features: {len(all_feature_names)}, Permutation importance values: {len(perm_importance.importances_mean)}. "
+                         f"Features with non-zero variance in X_test: {len(active_feature_names)}. "
+                         f"This indicates an unexpected issue with feature alignment. Please try reloading the app or contact support.")
+                return None
+            
+            feature_names_for_plot = active_feature_names
+        else:
+            feature_names_for_plot = all_feature_names
 
         # Create DataFrame for plotting
         importance_df = pd.DataFrame({
-            'feature': feature_names,
+            'feature': feature_names_for_plot,
             'importance': perm_importance.importances_mean,
             'std': perm_importance.importances_std
         }).sort_values('importance', ascending=True)
@@ -219,17 +238,27 @@ def analyze_customer_prediction(pipeline, customer_data, feature_names):
         
         # Get feature importance from the model
         model = pipeline.named_steps['classifier']
-        feature_importance = model.feature_importances_
+        model_feature_importance = model.feature_importances_
         
-        # Transform the customer data to get feature values
         preprocessor = pipeline.named_steps['preprocessor']
+        # Get feature names that the preprocessor outputs (these are the features the model was trained on)
+        preprocessor_output_feature_names = preprocessor.get_feature_names_out()
+
+        # Check for length mismatch between preprocessor output and model's feature importances
+        if len(preprocessor_output_feature_names) != len(model_feature_importance):
+            st.error(f"Internal Error in individual analysis: Mismatch between preprocessor output features "
+                     f"({len(preprocessor_output_feature_names)}) and model feature importances "
+                     f"({len(model_feature_importance)}). Cannot perform detailed analysis.")
+            return None, None, None
+
+        # Transform the customer data to get feature values in the model's feature space
         transformed_data = preprocessor.transform(customer_data)
         
         # Create analysis DataFrame
         analysis_df = pd.DataFrame({
-            'feature': feature_names,
-            'value': transformed_data[0],
-            'importance': feature_importance
+            'feature': preprocessor_output_feature_names, # Use the names from preprocessor output
+            'value': transformed_data[0], # Use the transformed values
+            'importance': model_feature_importance
         })
         
         # Sort by importance
