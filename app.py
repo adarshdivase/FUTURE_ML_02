@@ -45,9 +45,11 @@ def train_model(df):
     X = df.drop('Exited', axis=1)
     y = df['Exited']
 
-    # Define categorical and numerical features based on the new dataset
+    # --- THIS IS THE FIX ---
+    # Define features based on the columns ACTUALLY in your dataset
     categorical_features = ['Geography', 'Gender']
-    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'NumOfProducts', 'HasCrCard', 'IsActiveMember', 'EstimatedSalary']
+    # Removed 'NumOfProducts', 'HasCrCard', 'IsActiveMember' as they are not in the provided file
+    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'EstimatedSalary']
 
     # Create preprocessing pipelines
     preprocessor = ColumnTransformer(
@@ -120,25 +122,22 @@ try:
         st.sidebar.header("🔮 Predict Live Churn")
         st.sidebar.write("Enter a customer's details to predict their churn probability.")
 
-        # Create input fields in the sidebar based on the new dataset
+        # --- THIS IS THE FIX ---
+        # Create input fields based on the available columns
         credit_score = st.sidebar.slider("Credit Score", 300, 850, 650)
         geography = st.sidebar.selectbox("Geography", df['Geography'].unique())
         gender = st.sidebar.selectbox("Gender", df['Gender'].unique())
         age = st.sidebar.slider("Age", 18, 100, 35)
         tenure = st.sidebar.slider("Tenure (years)", 0, 10, 5)
         balance = st.sidebar.slider("Balance", 0.0, 250000.0, 0.0)
-        num_of_products = st.sidebar.selectbox("Number of Products", [1, 2, 3, 4])
-        has_cr_card = st.sidebar.selectbox("Has Credit Card?", [0, 1])
-        is_active_member = st.sidebar.selectbox("Is Active Member?", [0, 1])
         estimated_salary = st.sidebar.slider("Estimated Salary", 0.0, 200000.0, 50000.0)
         
         if st.sidebar.button("Predict Churn"):
-            # Create a DataFrame from the inputs
+            # Create a DataFrame from the available inputs
             input_data = pd.DataFrame({
                 'CreditScore': [credit_score], 'Geography': [geography], 'Gender': [gender],
                 'Age': [age], 'Tenure': [tenure], 'Balance': [balance],
-                'NumOfProducts': [num_of_products], 'HasCrCard': [has_cr_card],
-                'IsActiveMember': [is_active_member], 'EstimatedSalary': [estimated_salary]
+                'EstimatedSalary': [estimated_salary]
             })
 
             # Make prediction
