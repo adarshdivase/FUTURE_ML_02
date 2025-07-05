@@ -1,7 +1,8 @@
 streamlit>=1.32.0
 pandas>=1.5.0
 numpy>=1.22.0
-matplotlib>=3.5.0
-seaborn>=0.11.2
+matplotlib>=3.10.3  # Updated to the latest stable as of May 2025
+seaborn>=0.13.2     # Updated to the latest stable as of January 2024
 scikit-learn>=1.3.0
 xgboost>=1.7.0
+plotly>=5.0.0 
