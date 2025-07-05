@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
+import shap
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -20,7 +21,7 @@ warnings.filterwarnings("ignore")
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="Advanced Churn Prediction",
+    page_title="Professional Churn Prediction",
     page_icon="🏆",
     layout="wide"
 )
@@ -66,6 +67,7 @@ def train_model(df):
     ])
     
     # --- Hyperparameter Tuning with GridSearchCV ---
+    # Define a focused parameter grid for efficient tuning
     param_grid = {
         'classifier__n_estimators': [100, 200],
         'classifier__max_depth': [3, 5],
@@ -76,9 +78,10 @@ def train_model(df):
     grid_search = GridSearchCV(xgb_pipeline, param_grid, cv=3, scoring='roc_auc', n_jobs=1, verbose=2)
     grid_search.fit(X_train, y_train)
     
+    # The best pipeline found by the grid search
     best_pipeline = grid_search.best_estimator_
     
-    return best_pipeline, X_test, y_test
+    return best_pipeline, X_test, y_test, X_train
 
 # --- Plotting Functions ---
 def plot_model_performance(y_test, y_pred, y_proba):
@@ -99,16 +102,16 @@ def plot_model_performance(y_test, y_pred, y_proba):
     plt.close(fig) # Close the figure to free memory
 
 # --- Main App ---
-st.title("🏆 Advanced Bank Customer Churn Prediction")
+st.title("🏆 Professional Bank Customer Churn Prediction")
 
 # Load data and train models
 try:
     df = load_data(CSV_FILE_PATH)
     if df is not None:
         with st.spinner("Training advanced models with hyperparameter tuning... This may take a few minutes."):
-            pipeline, X_test, y_test = train_model(df)
+            pipeline, X_test, y_test, X_train = train_model(df)
 
-        tab1, tab2 = st.tabs(["📊 Model Performance", "🔮 Live Prediction"])
+        tab1, tab2, tab3 = st.tabs(["📊 Model Performance", "🔮 Live Prediction", "🧠 Model Explanation (SHAP)"])
 
         with tab1:
             st.header("Tuned XGBoost Model Performance")
@@ -157,6 +160,32 @@ try:
                     st.error(f"High Churn Risk ({churn_proba:.2%})")
                 else:
                     st.success(f"Low Churn Risk ({churn_proba:.2%})")
+
+        with tab3:
+            st.header("🧠 Explaining Predictions with SHAP")
+            with st.spinner("Calculating SHAP values..."):
+                preprocessor = pipeline.named_steps['preprocessor']
+                model = pipeline.named_steps['classifier']
+                
+                X_test_transformed = preprocessor.transform(X_test)
+                
+                explainer = shap.TreeExplainer(model)
+                shap_values = explainer.shap_values(X_test_transformed)
+
+            st.subheader("Individual Prediction Explanation")
+            st.write("Select a customer from the test set to see a detailed breakdown of their prediction.")
+            selected_idx = st.selectbox("Select a customer index to explain:", X_test.index)
+            
+            if selected_idx is not None:
+                idx_pos = X_test.index.get_loc(selected_idx)
+                
+                st.write("The plot below shows how each feature contributed to the final prediction. Red features increase churn risk, blue features decrease it.")
+                
+                # Generate the plot with Matplotlib and display it with st.pyplot
+                fig_force, ax_force = plt.subplots()
+                shap.force_plot(explainer.expected_value, shap_values[idx_pos,:], X_test.iloc[idx_pos,:], matplotlib=True, show=False)
+                st.pyplot(fig_force, bbox_inches='tight')
+                plt.close(fig_force) # Close the figure to free memory
 
 except FileNotFoundError:
     st.error(f"Error: The data file was not found at '{CSV_FILE_PATH}'.")
