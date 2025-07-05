@@ -27,21 +27,32 @@ st.set_page_config(
 )
 
 # --- Configuration ---
+# Ensure the CSV file is in the same directory as app.py when deploying
 CSV_FILE_PATH = "Customer Churn new.csv"
 
 # --- Data Loading and Caching ---
 @st.cache_data
 def load_data(path):
     """Loads and preprocesses the Bank Churn dataset."""
-    df = pd.read_csv(path)
-    # Drop columns that are identifiers and not useful for modeling
-    if 'RowNumber' in df.columns:
-        df.drop(columns=['RowNumber', 'CustomerId', 'Surname'], inplace=True)
-    return df
+    try:
+        df = pd.read_csv(path)
+        # Drop columns that are identifiers and not useful for modeling
+        if 'RowNumber' in df.columns:
+            df.drop(columns=['RowNumber', 'CustomerId', 'Surname'], inplace=True)
+        return df
+    except FileNotFoundError:
+        st.error(f"Error: The data file was not found at '{path}'. Please ensure 'Customer Churn new.csv' is in the same directory as app.py.")
+        return None
+    except Exception as e:
+        st.error(f"An error occurred while loading data: {e}")
+        return None
 
 @st.cache_resource
 def train_model(df):
     """Preprocesses data, trains a tuned XGBoost model, and returns it."""
+    if df is None:
+        return None, None, None, None
+
     X = df.drop('Exited', axis=1)
     y = df['Exited']
 
@@ -54,7 +65,9 @@ def train_model(df):
         transformers=[
             ('num', StandardScaler(), numerical_features),
             ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_features)
-        ])
+        ],
+        remainder='passthrough' # Keep other columns if any, though not expected here
+    )
 
     # Split data before training
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
@@ -75,7 +88,7 @@ def train_model(df):
     }
 
     # Grid search with cross-validation. n_jobs=1 is more stable for deployment.
-    grid_search = GridSearchCV(xgb_pipeline, param_grid, cv=3, scoring='roc_auc', n_jobs=1, verbose=2)
+    grid_search = GridSearchCV(xgb_pipeline, param_grid, cv=3, scoring='roc_auc', n_jobs=1, verbose=0) # verbose=0 for cleaner output
     grid_search.fit(X_train, y_train)
     
     # The best pipeline found by the grid search
@@ -105,12 +118,13 @@ def plot_model_performance(y_test, y_pred, y_proba):
 st.title("🏆 Professional Bank Customer Churn Prediction")
 
 # Load data and train models
-try:
-    df = load_data(CSV_FILE_PATH)
-    if df is not None:
-        with st.spinner("Training advanced models with hyperparameter tuning... This may take a few minutes."):
-            pipeline, X_test, y_test, X_train = train_model(df)
+df = load_data(CSV_FILE_PATH)
 
+if df is not None:
+    with st.spinner("Training advanced models with hyperparameter tuning... This may take a few minutes."):
+        pipeline, X_test, y_test, X_train = train_model(df)
+
+    if pipeline is not None:
         tab1, tab2, tab3 = st.tabs(["📊 Model Performance", "🔮 Live Prediction", "🧠 Model Explanation (SHAP)"])
 
         with tab1:
@@ -163,31 +177,55 @@ try:
 
         with tab3:
             st.header("🧠 Explaining Predictions with SHAP")
-            with st.spinner("Calculating SHAP values..."):
+            st.write("Please note: SHAP value calculation can be computationally intensive.")
+            with st.spinner("Calculating SHAP values... This may take a moment."):
                 preprocessor = pipeline.named_steps['preprocessor']
                 model = pipeline.named_steps['classifier']
                 
+                # Transform X_test to get data in the format expected by SHAP explainer
                 X_test_transformed = preprocessor.transform(X_test)
                 
+                # Get feature names after preprocessing (including one-hot encoded categories)
+                # This is crucial for SHAP plots to display correct feature names
+                feature_names = preprocessor.get_feature_names_out()
+
                 explainer = shap.TreeExplainer(model)
                 shap_values = explainer.shap_values(X_test_transformed)
 
             st.subheader("Individual Prediction Explanation")
             st.write("Select a customer from the test set to see a detailed breakdown of their prediction.")
-            selected_idx = st.selectbox("Select a customer index to explain:", X_test.index)
             
+            # Create a mapping from original index to a displayable label
+            display_indices = {idx: f"Customer {idx} (Actual Churn: {'Yes' if y_test.loc[idx] == 1 else 'No'})" for idx in X_test.index}
+            selected_display_label = st.selectbox("Select a customer to explain:", options=list(display_indices.values()))
+            
+            # Get the actual index back from the display label
+            selected_idx = None
+            for original_idx, label in display_indices.items():
+                if label == selected_display_label:
+                    selected_idx = original_idx
+                    break
+
             if selected_idx is not None:
+                # Get the position of the selected index in the X_test DataFrame
                 idx_pos = X_test.index.get_loc(selected_idx)
                 
                 st.write("The plot below shows how each feature contributed to the final prediction. Red features increase churn risk, blue features decrease it.")
                 
                 # Generate the plot with Matplotlib and display it with st.pyplot
-                fig_force, ax_force = plt.subplots()
-                shap.force_plot(explainer.expected_value, shap_values[idx_pos,:], X_test.iloc[idx_pos,:], matplotlib=True, show=False)
+                fig_force, ax_force = plt.subplots(figsize=(10, 6)) # Adjust figure size for better display
+                
+                # Ensure the input to force_plot is a DataFrame with correct column names
+                shap.force_plot(
+                    explainer.expected_value,
+                    shap_values[idx_pos,:],
+                    pd.DataFrame(X_test_transformed[idx_pos,:].reshape(1, -1), columns=feature_names),
+                    matplotlib=True,
+                    show=False,
+                    ax=ax_force # Pass the axes object
+                )
+                
                 st.pyplot(fig_force, bbox_inches='tight')
                 plt.close(fig_force) # Close the figure to free memory
-
-except FileNotFoundError:
-    st.error(f"Error: The data file was not found at '{CSV_FILE_PATH}'.")
-except Exception as e:
-    st.error(f"An error occurred: {e}")
+    else:
+        st.error("Model training failed. Please check the data and logs.")
