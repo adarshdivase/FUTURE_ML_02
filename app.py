@@ -45,9 +45,6 @@ def create_sample_data():
     df = pd.DataFrame(data)
     
     # Higher churn probability for certain conditions
-    churn_prob = 0.2  # Base probability
-    
-    # Increase churn probability based on features
     prob_adjustments = (
         (df['Age'] > 50) * 0.15 +   # Older customers more likely to churn
         (df['Balance'] == 0) * 0.2 +   # Zero balance customers
@@ -55,7 +52,7 @@ def create_sample_data():
         (df['Tenure'] <= 1) * 0.1   # New customers
     )
     
-    final_prob = np.clip(churn_prob + prob_adjustments, 0, 0.8)
+    final_prob = np.clip(0.2 + prob_adjustments, 0, 0.8) # Base probability 0.2
     df['Exited'] = np.random.binomial(1, final_prob)
     
     return df
@@ -166,33 +163,31 @@ def plot_feature_importance(pipeline, X_test, y_test):
         # Calculate permutation importance
         perm_importance = permutation_importance(pipeline, X_test, y_test, n_repeats=10, random_state=42)
         
-        # Check if the number of importance values matches the number of all feature names
-        if len(all_feature_names) != len(perm_importance.importances_mean):
-            # This scenario occurs if permutation_importance implicitly skips features
-            # (e.g., those with zero variance in X_test, like a one-hot encoded category not present in test set).
-            # We need to filter `all_feature_names` to match the length of `importances_mean`.
-            
-            # Transform X_test to identify which features are 'active' (non-constant) in the test set
-            X_test_transformed = preprocessor.transform(X_test)
-            
-            # Create a temporary DataFrame to easily calculate variance and filter
-            temp_transformed_df = pd.DataFrame(X_test_transformed, columns=all_feature_names)
-            
-            # Filter feature names to only include those with non-zero variance in X_test_transformed
-            # Use a small epsilon for floating-point comparisons
-            active_feature_names = [col for col in all_feature_names if temp_transformed_df[col].var() > 1e-9]
-            
-            if len(active_feature_names) != len(perm_importance.importances_mean):
-                # If lengths still don't match after filtering, something more complex is wrong.
-                st.error(f"Internal Error: Mismatch in feature count for importance plot even after filtering for active features. "
-                         f"Preprocessor output features: {len(all_feature_names)}, Permutation importance values: {len(perm_importance.importances_mean)}. "
-                         f"Features with non-zero variance in X_test: {len(active_feature_names)}. "
-                         f"This indicates an unexpected issue with feature alignment. Please try reloading the app or contact support.")
-                return None
-            
-            feature_names_for_plot = active_feature_names
+        # Get the actual number of importance values returned by permutation_importance
+        num_importance_values = len(perm_importance.importances_mean)
+        
+        # Transform X_test to identify which features are 'active' (non-constant) in the test set
+        X_test_transformed = preprocessor.transform(X_test)
+        temp_transformed_df = pd.DataFrame(X_test_transformed, columns=all_feature_names)
+        
+        # Filter feature names to only include those with non-zero variance in X_test_transformed
+        # Use a small epsilon for floating-point comparisons
+        active_feature_names = [col for col in all_feature_names if temp_transformed_df[col].var() > 1e-9]
+        
+        # --- FIX START ---
+        # Ensure feature_names_for_plot matches the length of importance values
+        if len(active_feature_names) != num_importance_values:
+            st.warning(f"Warning: Mismatch detected between expected feature count ({len(active_feature_names)}) "
+                       f"and actual permutation importance values ({num_importance_values}). "
+                       f"This might indicate some features were implicitly ignored by permutation_importance. "
+                       f"Adjusting feature names for plotting to match importance values. "
+                       f"Please ensure your dataset has sufficient variance across all features in the test set.")
+            # If active_feature_names is longer, we truncate it.
+            # We assume the order is preserved, so we take the first `num_importance_values` names.
+            feature_names_for_plot = active_feature_names[:num_importance_values]
         else:
-            feature_names_for_plot = all_feature_names
+            feature_names_for_plot = active_feature_names
+        # --- FIX END ---
 
         # Create DataFrame for plotting
         importance_df = pd.DataFrame({
