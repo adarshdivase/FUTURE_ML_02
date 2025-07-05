@@ -154,7 +154,7 @@ def plot_model_performance(y_test, y_pred, y_proba):
     plt.close(fig)
 
 def plot_feature_importance(pipeline, X_test, y_test):
-    """Create feature importance plot using permutation importance - Fixed version"""
+    """Create feature importance plot using permutation importance - Improved version"""
     try:
         # Get feature names from the preprocessor
         preprocessor = pipeline.named_steps['preprocessor']
@@ -193,61 +193,85 @@ def plot_feature_importance(pipeline, X_test, y_test):
             'std': perm_importance.importances_std
         }).sort_values('importance', ascending=True)
         
-        # Plot with improved alignment
-        fig, ax = plt.subplots(figsize=(12, 8))
-        y_pos = np.arange(len(importance_df))
-        
-        # Create bars with better color scheme
-        bars = ax.barh(y_pos, importance_df['importance'], 
-                       xerr=importance_df['std'], capsize=3, 
-                       color='lightblue', edgecolor='steelblue', linewidth=0.5)
-        
-        # Set y-axis properties
-        ax.set_yticks(y_pos)
-        
         # Clean up feature names for better readability
         cleaned_features = []
         for feature in importance_df['feature']:
             # Remove prefixes and make more readable
             if feature.startswith('num__'):
-                cleaned_features.append(feature.replace('num__', ''))
+                clean_name = feature.replace('num__', '')
             elif feature.startswith('cat__'):
-                cleaned_features.append(feature.replace('cat__', '').replace('_', ' '))
+                clean_name = feature.replace('cat__', '').replace('_', ' ')
             else:
-                cleaned_features.append(feature.replace('_', ' '))
+                clean_name = feature.replace('_', ' ')
+            
+            # Capitalize first letter of each word
+            clean_name = ' '.join(word.capitalize() for word in clean_name.split())
+            cleaned_features.append(clean_name)
         
-        ax.set_yticklabels(cleaned_features, fontsize=10)
-        ax.set_xlabel('Permutation Importance', fontsize=12, fontweight='bold')
-        ax.set_title('Feature Importance Analysis (Non-Zero Variance Features)', 
-                    fontsize=14, fontweight='bold', pad=20)
+        # Create figure with better dimensions
+        fig, ax = plt.subplots(figsize=(14, max(8, len(importance_df) * 0.4)))
         
-        # Improve grid appearance
-        ax.grid(True, alpha=0.3, axis='x')
+        # Create color map based on importance values
+        colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(importance_df)))
+        
+        # Create horizontal bar plot
+        y_pos = np.arange(len(importance_df))
+        bars = ax.barh(y_pos, importance_df['importance'], 
+                       xerr=importance_df['std'], 
+                       capsize=4, 
+                       color=colors,
+                       edgecolor='white', 
+                       linewidth=1,
+                       alpha=0.8)
+        
+        # Set y-axis properties with improved spacing
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(cleaned_features, fontsize=11, fontweight='medium')
+        
+        # Improve x-axis
+        ax.set_xlabel('Permutation Importance', fontsize=13, fontweight='bold', labelpad=10)
+        ax.set_title('Feature Importance Analysis\n(Permutation-based)', 
+                    fontsize=16, fontweight='bold', pad=25)
+        
+        # Add subtle grid
+        ax.grid(True, alpha=0.3, axis='x', linestyle='--', linewidth=0.5)
         ax.set_axisbelow(True)
         
         # Add value labels on bars with better positioning
         max_val = importance_df['importance'].max()
         for i, (bar, val, std) in enumerate(zip(bars, importance_df['importance'], importance_df['std'])):
-            # Position text based on bar width
-            text_x = bar.get_width() + max_val * 0.02
+            # Position text with better spacing
+            text_x = bar.get_width() + max_val * 0.01
             ax.text(text_x, bar.get_y() + bar.get_height()/2, 
-                   f'{val:.3f}', va='center', ha='left', fontsize=9, fontweight='bold')
+                   f'{val:.3f}', 
+                   va='center', ha='left', 
+                   fontsize=10, fontweight='bold',
+                   bbox=dict(boxstyle="round,pad=0.2", facecolor='white', alpha=0.8, edgecolor='gray'))
         
-        # Set x-axis limits to accommodate labels
-        ax.set_xlim(0, max_val * 1.2)
+        # Set x-axis limits with better margins
+        ax.set_xlim(0, max_val * 1.25)
         
-        # Remove top and right spines for cleaner look
+        # Improve plot aesthetics
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_linewidth(1.5)
+        ax.spines['bottom'].set_linewidth(1.5)
         
+        # Add a subtle background color
+        ax.set_facecolor('#f8f9fa')
+        
+        # Adjust layout to prevent label cutoff
         plt.tight_layout()
+        plt.subplots_adjust(left=0.25, right=0.95, top=0.9, bottom=0.1)
+        
         st.pyplot(fig)
         plt.close(fig)
         
         # Show additional information about excluded features
         if not np.all(non_zero_variance_mask):
             excluded_features = feature_names[~non_zero_variance_mask]
-            st.info(f"**Excluded features (zero variance):** {', '.join(excluded_features)}")
+            with st.expander("ℹ️ Excluded Features (Zero Variance)"):
+                st.write(f"**Excluded features:** {', '.join(excluded_features)}")
         
         return importance_df
         
@@ -473,56 +497,76 @@ if df is not None:
                         prediction_correct = pred_class == actual_churn
                         st.write(f"- Prediction Correct: {'✅ Yes' if prediction_correct else '❌ No'}")
                     
-                    # Show feature analysis
+                    # Show feature analysis - IMPROVED VERSION
                     st.subheader("Feature Analysis for Selected Customer")
                     
                     # Plot top contributing features with improved styling
-                    fig, ax = plt.subplots(figsize=(12, 8))
+                    fig, ax = plt.subplots(figsize=(14, 10))
                     
                     top_features = analysis_df.head(10)
                     
                     # Create better color scheme based on feature importance
-                    colors = ['darkred' if x > top_features['importance'].mean() else 'steelblue' 
-                             for x in top_features['importance']]
+                    norm = plt.Normalize(vmin=top_features['importance'].min(), vmax=top_features['importance'].max())
+                    colors = plt.cm.RdYlBu_r(norm(top_features['importance'].values))
                     
                     bars = ax.barh(range(len(top_features)), top_features['importance'], 
-                                  color=colors, alpha=0.7, edgecolor='black', linewidth=0.5)
+                                  color=colors, alpha=0.8, edgecolor='white', linewidth=1.5)
                     
                     # Clean up feature names for better readability
                     cleaned_feature_names = []
                     for feature in top_features['feature']:
                         if feature.startswith('num__'):
-                            cleaned_feature_names.append(feature.replace('num__', ''))
+                            clean_name = feature.replace('num__', '')
                         elif feature.startswith('cat__'):
-                            cleaned_feature_names.append(feature.replace('cat__', '').replace('_', ' '))
+                            clean_name = feature.replace('cat__', '').replace('_', ' ')
                         else:
-                            cleaned_feature_names.append(feature.replace('_', ' '))
+                            clean_name = feature.replace('_', ' ')
+                        
+                        # Capitalize first letter of each word
+                        clean_name = ' '.join(word.capitalize() for word in clean_name.split())
+                        cleaned_feature_names.append(clean_name)
                     
+                    # Set y-axis with improved spacing
                     ax.set_yticks(range(len(top_features)))
-                    ax.set_yticklabels(cleaned_feature_names, fontsize=10)
-                    ax.set_xlabel('Feature Importance', fontsize=12, fontweight='bold')
-                    ax.set_title('Top 10 Feature Contributions for Selected Customer', 
-                                fontsize=14, fontweight='bold', pad=20)
+                    ax.set_yticklabels(cleaned_feature_names, fontsize=12, fontweight='medium')
                     
-                    # Improve grid appearance
-                    ax.grid(True, alpha=0.3, axis='x')
+                    # Improve axis labels and title
+                    ax.set_xlabel('Feature Importance', fontsize=14, fontweight='bold', labelpad=12)
+                    ax.set_title(f'Top 10 Feature Contributions for {selected_customer}\n'
+                                f'Churn Probability: {pred_proba:.1%} | Prediction: {"High Risk" if pred_proba > 0.5 else "Low Risk"}', 
+                                fontsize=16, fontweight='bold', pad=25)
+                    
+                    # Add subtle grid
+                    ax.grid(True, alpha=0.3, axis='x', linestyle='--', linewidth=0.5)
                     ax.set_axisbelow(True)
                     
-                    # Add value labels with better positioning
+                    # Add value labels with better positioning and styling
                     max_val = top_features['importance'].max()
                     for i, (bar, val) in enumerate(zip(bars, top_features['importance'])):
-                        text_x = bar.get_width() + max_val * 0.02
+                        # Position text with better spacing
+                        text_x = bar.get_width() + max_val * 0.01
                         ax.text(text_x, bar.get_y() + bar.get_height()/2, 
-                               f'{val:.3f}', va='center', ha='left', fontsize=9, fontweight='bold')
+                               f'{val:.3f}', 
+                               va='center', ha='left', 
+                               fontsize=11, fontweight='bold',
+                               bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.9, edgecolor='gray'))
                     
-                    # Set x-axis limits to accommodate labels
-                    ax.set_xlim(0, max_val * 1.2)
+                    # Set x-axis limits with better margins
+                    ax.set_xlim(0, max_val * 1.3)
                     
-                    # Remove top and right spines for cleaner look
+                    # Improve plot aesthetics
                     ax.spines['top'].set_visible(False)
                     ax.spines['right'].set_visible(False)
+                    ax.spines['left'].set_linewidth(1.5)
+                    ax.spines['bottom'].set_linewidth(1.5)
                     
+                    # Add background color
+                    ax.set_facecolor('#f8f9fa')
+                    
+                    # Adjust layout to prevent label cutoff
                     plt.tight_layout()
+                    plt.subplots_adjust(left=0.25, right=0.95, top=0.85, bottom=0.1)
+                    
                     st.pyplot(fig)
                     plt.close(fig)
                     
