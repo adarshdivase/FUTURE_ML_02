@@ -4,5 +4,7 @@ scikit-learn
 matplotlib
 seaborn
 xgboost
-shap
+shap==0.46.0
+numba==0.61.2
+llvmlite==0.44.0
 imbalanced-learn
