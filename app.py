@@ -69,15 +69,16 @@ def train_model(df):
     X = df.drop('Exited', axis=1)
     y = df['Exited']
 
-    # Define categorical and numerical features based on your full description
+    # Define categorical and numerical features based on the columns consistently present in your CSV
+    # Removed 'NumOfProducts', 'HasCrCard', 'IsActiveMember' as they were reported missing
     categorical_features = ['Geography', 'Gender']
-    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'NumOfProducts', 'HasCrCard', 'IsActiveMember', 'EstimatedSalary']
+    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'EstimatedSalary']
 
     # Check for existence of all required features
     all_features = numerical_features + categorical_features
     missing_features = [f for f in all_features if f not in X.columns]
     if missing_features:
-        st.error(f"Error: The following required features are missing from your dataset: {', '.join(missing_features)}. Please upload a 'Customer Churn new.csv' file that contains these columns to proceed.")
+        st.error(f"Error: The following required features are missing from your dataset: {', '.join(missing_features)}. Please ensure your 'Customer Churn new.csv' contains these columns or adjust the code accordingly.")
         return None, None, None, None
 
     # Create a preprocessor
@@ -180,21 +181,17 @@ if df is not None:
                 age = st.slider("Age", 18, 100, 35)
                 tenure = st.slider("Tenure (years)", 0, 10, 5)
                 balance = st.slider("Balance", 0.0, 250000.0, 0.0)
-                # Re-added these inputs as the code now expects them
-                num_of_products = st.selectbox("Number of Products", [1, 2, 3, 4]) # Assuming common product counts
-                has_cr_card = st.selectbox("Has Credit Card?", [0, 1], format_func=lambda x: 'Yes' if x == 1 else 'No')
-                is_active_member = st.selectbox("Is Active Member?", [0, 1], format_func=lambda x: 'Yes' if x == 1 else 'No')
+                # Removed inputs for 'NumOfProducts', 'HasCrCard', 'IsActiveMember'
                 estimated_salary = st.slider("Estimated Salary", 0.0, 200000.0, 50000.0)
                 
                 submitted = st.form_submit_button("Predict Churn")
 
             if submitted:
-                # Re-added these features to input_data
+                # Removed 'NumOfProducts', 'HasCrCard', 'IsActiveMember' from input_data
                 input_data = pd.DataFrame({
                     'CreditScore': [credit_score], 'Geography': [geography], 'Gender': [gender],
                     'Age': [age], 'Tenure': [tenure], 'Balance': [balance],
-                    'NumOfProducts': [num_of_products], 'HasCrCard': [has_cr_card],
-                    'IsActiveMember': [is_active_member], 'EstimatedSalary': [estimated_salary]
+                    'EstimatedSalary': [estimated_salary]
                 })
                 churn_proba = pipeline.predict_proba(input_data)[0, 1]
                 
