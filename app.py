@@ -7,7 +7,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
-import shap
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -15,6 +14,7 @@ from imblearn.pipeline import Pipeline as ImbPipeline
 from imblearn.over_sampling import SMOTE
 from xgboost import XGBClassifier
 from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score, accuracy_score, precision_score, recall_score
+from sklearn.inspection import permutation_importance
 
 warnings.filterwarnings("ignore")
 
@@ -141,44 +141,81 @@ def plot_model_performance(y_test, y_pred, y_proba):
     st.pyplot(fig)
     plt.close(fig)
 
-def plot_shap_explanation(pipeline, X_test, customer_idx):
-    """Create SHAP explanation plot for a specific customer"""
+def plot_feature_importance(pipeline, X_test, y_test):
+    """Create feature importance plot using permutation importance"""
     try:
-        preprocessor = pipeline.named_steps['preprocessor']
-        model = pipeline.named_steps['classifier']
-        
-        # Transform the data
-        X_transformed = preprocessor.transform(X_test)
-        
-        # Create explainer
-        explainer = shap.TreeExplainer(model)
-        shap_values = explainer.shap_values(X_transformed)
+        # Calculate permutation importance
+        perm_importance = permutation_importance(pipeline, X_test, y_test, n_repeats=10, random_state=42)
         
         # Get feature names
+        preprocessor = pipeline.named_steps['preprocessor']
         feature_names = preprocessor.get_feature_names_out()
         
-        # Create waterfall plot for the selected customer
-        fig, ax = plt.subplots(figsize=(12, 8))
+        # Create DataFrame for plotting
+        importance_df = pd.DataFrame({
+            'feature': feature_names,
+            'importance': perm_importance.importances_mean,
+            'std': perm_importance.importances_std
+        }).sort_values('importance', ascending=True)
         
-        # Use waterfall plot instead of force plot for better compatibility
-        shap_exp = shap.Explanation(
-            values=shap_values[customer_idx],
-            base_values=explainer.expected_value,
-            data=X_transformed[customer_idx],
-            feature_names=feature_names
-        )
+        # Plot
+        fig, ax = plt.subplots(figsize=(10, 8))
+        y_pos = np.arange(len(importance_df))
         
-        shap.waterfall_plot(shap_exp, show=False)
+        bars = ax.barh(y_pos, importance_df['importance'], 
+                      xerr=importance_df['std'], capsize=3, color='skyblue')
+        
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(importance_df['feature'])
+        ax.set_xlabel('Permutation Importance')
+        ax.set_title('Feature Importance Analysis')
+        ax.grid(True, alpha=0.3)
+        
+        # Add value labels on bars
+        for i, (bar, val) in enumerate(zip(bars, importance_df['importance'])):
+            ax.text(bar.get_width() + 0.001, bar.get_y() + bar.get_height()/2, 
+                   f'{val:.3f}', va='center', fontsize=8)
+        
         plt.tight_layout()
-        
         st.pyplot(fig)
         plt.close(fig)
         
-        return True
+        return importance_df
         
     except Exception as e:
-        st.error(f"Error creating SHAP explanation: {e}")
-        return False
+        st.error(f"Error creating feature importance plot: {e}")
+        return None
+
+def analyze_customer_prediction(pipeline, customer_data, feature_names):
+    """Analyze why a customer was predicted to churn or not"""
+    try:
+        # Get the prediction and probability
+        pred_proba = pipeline.predict_proba(customer_data)[0, 1]
+        pred_class = pipeline.predict(customer_data)[0]
+        
+        # Get feature importance from the model
+        model = pipeline.named_steps['classifier']
+        feature_importance = model.feature_importances_
+        
+        # Transform the customer data to get feature values
+        preprocessor = pipeline.named_steps['preprocessor']
+        transformed_data = preprocessor.transform(customer_data)
+        
+        # Create analysis DataFrame
+        analysis_df = pd.DataFrame({
+            'feature': feature_names,
+            'value': transformed_data[0],
+            'importance': feature_importance
+        })
+        
+        # Sort by importance
+        analysis_df = analysis_df.sort_values('importance', ascending=False)
+        
+        return pred_proba, pred_class, analysis_df
+        
+    except Exception as e:
+        st.error(f"Error analyzing customer prediction: {e}")
+        return None, None, None
 
 # Main app
 st.title("🏆 Professional Bank Customer Churn Prediction")
@@ -209,7 +246,7 @@ if df is not None:
         pipeline, X_test, y_test, X_train, preprocessor = train_model(df)
 
     if pipeline:
-        tab1, tab2, tab3 = st.tabs(["📊 Model Performance", "🔮 Live Prediction", "🧠 SHAP Explanation"])
+        tab1, tab2, tab3 = st.tabs(["📊 Model Performance", "🔮 Live Prediction", "🧠 Feature Analysis"])
 
         with tab1:
             st.header("Model Performance Metrics")
@@ -274,46 +311,100 @@ if df is not None:
                     st.write("**Recommendation:** Customer is likely to stay.")
 
         with tab3:
-            st.header("SHAP Model Explanation")
+            st.header("Feature Importance Analysis")
+            
+            # Overall feature importance
+            st.subheader("Overall Feature Importance")
+            with st.spinner("Calculating feature importance..."):
+                importance_df = plot_feature_importance(pipeline, X_test, y_test)
+            
+            if importance_df is not None:
+                st.write("**Top 5 Most Important Features:**")
+                top_features = importance_df.tail(5).sort_values('importance', ascending=False)
+                for idx, row in top_features.iterrows():
+                    st.write(f"• **{row['feature']}**: {row['importance']:.3f} ± {row['std']:.3f}")
+            
+            st.markdown("---")
+            
+            # Individual customer analysis
+            st.subheader("Individual Customer Analysis")
             
             if len(X_test) > 0:
-                st.subheader("Feature Importance for Individual Predictions")
-                
                 # Customer selection
                 n_customers = min(10, len(X_test))
                 customer_options = [f"Customer {i+1}" for i in range(n_customers)]
-                selected_customer = st.selectbox("Select a customer for detailed explanation:", customer_options)
+                selected_customer = st.selectbox("Select a customer for detailed analysis:", customer_options)
                 
                 customer_idx = customer_options.index(selected_customer)
                 
                 # Show customer details
-                customer_data = X_test.iloc[customer_idx]
+                customer_data = X_test.iloc[[customer_idx]]
                 actual_churn = y_test.iloc[customer_idx]
-                predicted_prob = pipeline.predict_proba(X_test.iloc[[customer_idx]])[0, 1]
                 
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("**Customer Details:**")
-                    for feature, value in customer_data.items():
-                        st.write(f"- {feature}: {value}")
+                # Get feature names for analysis
+                preprocessor = pipeline.named_steps['preprocessor']
+                feature_names = preprocessor.get_feature_names_out()
                 
-                with col2:
-                    st.write("**Prediction Results:**")
-                    st.write(f"- Predicted Churn Probability: {predicted_prob:.2%}")
-                    st.write(f"- Actual Outcome: {'Churned' if actual_churn else 'Retained'}")
-                    prediction_correct = (predicted_prob > 0.5) == actual_churn
-                    st.write(f"- Prediction Correct: {'✅ Yes' if prediction_correct else '❌ No'}")
+                # Analyze prediction
+                pred_proba, pred_class, analysis_df = analyze_customer_prediction(pipeline, customer_data, feature_names)
                 
-                st.markdown("---")
-                
-                # Generate SHAP explanation
-                if st.button("Generate SHAP Explanation"):
-                    with st.spinner("Generating explanation..."):
-                        success = plot_shap_explanation(pipeline, X_test, customer_idx)
-                        if success:
-                            st.success("SHAP explanation generated successfully!")
+                if pred_proba is not None:
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write("**Customer Details:**")
+                        for feature, value in customer_data.iloc[0].items():
+                            st.write(f"- {feature}: {value}")
+                    
+                    with col2:
+                        st.write("**Prediction Results:**")
+                        st.write(f"- Predicted Churn Probability: {pred_proba:.2%}")
+                        st.write(f"- Predicted Class: {'Will Churn' if pred_class else 'Will Stay'}")
+                        st.write(f"- Actual Outcome: {'Churned' if actual_churn else 'Retained'}")
+                        prediction_correct = pred_class == actual_churn
+                        st.write(f"- Prediction Correct: {'✅ Yes' if prediction_correct else '❌ No'}")
+                    
+                    # Show feature analysis
+                    st.subheader("Feature Analysis for Selected Customer")
+                    
+                    # Plot top contributing features
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    
+                    top_features = analysis_df.head(10)
+                    colors = ['red' if x > 0 else 'blue' for x in top_features['value']]
+                    
+                    bars = ax.barh(range(len(top_features)), top_features['importance'], color=colors, alpha=0.7)
+                    ax.set_yticks(range(len(top_features)))
+                    ax.set_yticklabels(top_features['feature'])
+                    ax.set_xlabel('Feature Importance')
+                    ax.set_title('Top 10 Feature Contributions')
+                    ax.grid(True, alpha=0.3)
+                    
+                    # Add value labels
+                    for i, (bar, val) in enumerate(zip(bars, top_features['importance'])):
+                        ax.text(bar.get_width() + 0.001, bar.get_y() + bar.get_height()/2, 
+                               f'{val:.3f}', va='center', fontsize=8)
+                    
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                    plt.close(fig)
+                    
+                    # Interpretation
+                    st.subheader("Interpretation")
+                    if pred_proba > 0.5:
+                        st.error("🚨 **High Churn Risk Customer**")
+                        st.write("**Key risk factors:**")
+                        risk_factors = top_features.head(3)
+                        for _, row in risk_factors.iterrows():
+                            st.write(f"• {row['feature']}: Feature importance {row['importance']:.3f}")
+                    else:
+                        st.success("✅ **Low Churn Risk Customer**")
+                        st.write("**Retention factors:**")
+                        retention_factors = top_features.head(3)
+                        for _, row in retention_factors.iterrows():
+                            st.write(f"• {row['feature']}: Feature importance {row['importance']:.3f}")
             else:
-                st.error("No test data available for SHAP explanation.")
+                st.error("No test data available for analysis.")
     else:
         st.error("Failed to train the model. Please check your data and try again.")
 else:
