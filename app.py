@@ -37,12 +37,15 @@ def load_data(path):
     try:
         df = pd.read_csv(path)
         # Drop columns that are identifiers and not useful for modeling
+        # Based on your description, 'RowNumber', 'CustomerId', 'Surname' are identifiers
         if 'RowNumber' in df.columns:
-            df.drop(columns=['RowNumber', 'CustomerId', 'Surname'], inplace=True)
+            df.drop(columns=['RowNumber'], inplace=True)
+        if 'CustomerId' in df.columns:
+            df.drop(columns=['CustomerId'], inplace=True)
+        if 'Surname' in df.columns:
+            df.drop(columns=['Surname'], inplace=True)
         
-        # --- ADDED: Print columns for debugging ---
         st.write("Columns loaded from CSV:", df.columns.tolist())
-        # --- END ADDED ---
         
         return df
     except FileNotFoundError:
@@ -58,20 +61,24 @@ def train_model(df):
     if df is None:
         return None, None, None, None
 
+    # Ensure 'Exited' column exists as target
+    if 'Exited' not in df.columns:
+        st.error("Error: The target column 'Exited' is missing from your dataset.")
+        return None, None, None, None
+
     X = df.drop('Exited', axis=1)
     y = df['Exited']
 
-    # Define categorical and numerical features
+    # Define categorical and numerical features based on your full description
     categorical_features = ['Geography', 'Gender']
     numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'NumOfProducts', 'HasCrCard', 'IsActiveMember', 'EstimatedSalary']
 
-    # --- ADDED: Check for existence of all required features ---
+    # Check for existence of all required features
     all_features = numerical_features + categorical_features
     missing_features = [f for f in all_features if f not in X.columns]
     if missing_features:
-        st.error(f"Error: The following required features are missing from your dataset: {', '.join(missing_features)}. Please check your CSV file and the feature lists in app.py.")
+        st.error(f"Error: The following required features are missing from your dataset: {', '.join(missing_features)}. Please upload a 'Customer Churn new.csv' file that contains these columns to proceed.")
         return None, None, None, None
-    # --- END ADDED ---
 
     # Create a preprocessor
     preprocessor = ColumnTransformer(
@@ -101,13 +108,13 @@ def train_model(df):
     }
 
     # Grid search with cross-validation. n_jobs=1 is more stable for deployment.
-    grid_search = GridSearchCV(xgb_pipeline, param_grid, cv=3, scoring='roc_auc', n_jobs=1, verbose=0) # verbose=0 for cleaner output
+    grid_search = GridSearchCV(xgb_pipeline, param_grid, cv=3, scoring='roc_auc', n_jobs=1, verbose=0)
     
-    try: # Added try-except for grid search fit
+    try:
         grid_search.fit(X_train, y_train)
     except Exception as e:
         st.error(f"An error occurred during model training (GridSearchCV fit): {e}")
-        st.info("This might be due to incorrect column names after preprocessing. Please check the 'Columns loaded from CSV' output.")
+        st.info("This might be due to issues with data preprocessing or feature consistency. Please ensure your dataset matches the expected features.")
         return None, None, None, None
     
     # The best pipeline found by the grid search
@@ -125,7 +132,8 @@ def plot_model_performance(y_test, y_pred, y_proba):
     ax1.set_xlabel('Predicted'); ax1.set_ylabel('Actual')
 
     fpr, tpr, _ = roc_curve(y_test, y_proba)
-    ax2.plot(fpr, tpr, label=f'XGBoost (AUC = {roc_auc_score(y_test, y_proba):.3f})')
+    auc_score = roc_auc_score(y_test, y_proba)
+    ax2.plot(fpr, tpr, label=f'XGBoost (AUC = {auc_score:.3f})')
     ax2.plot([0, 1], [0, 1], 'k--')
     ax2.set_xlabel('False Positive Rate'); ax2.set_ylabel('True Positive Rate')
     ax2.set_title('ROC Curve'); ax2.legend()
@@ -172,14 +180,16 @@ if df is not None:
                 age = st.slider("Age", 18, 100, 35)
                 tenure = st.slider("Tenure (years)", 0, 10, 5)
                 balance = st.slider("Balance", 0.0, 250000.0, 0.0)
-                num_of_products = st.selectbox("Number of Products", df['NumOfProducts'].unique())
-                has_cr_card = st.selectbox("Has Credit Card?", df['HasCrCard'].unique(), format_func=lambda x: 'Yes' if x == 1 else 'No')
-                is_active_member = st.selectbox("Is Active Member?", df['IsActiveMember'].unique(), format_func=lambda x: 'Yes' if x == 1 else 'No')
+                # Re-added these inputs as the code now expects them
+                num_of_products = st.selectbox("Number of Products", [1, 2, 3, 4]) # Assuming common product counts
+                has_cr_card = st.selectbox("Has Credit Card?", [0, 1], format_func=lambda x: 'Yes' if x == 1 else 'No')
+                is_active_member = st.selectbox("Is Active Member?", [0, 1], format_func=lambda x: 'Yes' if x == 1 else 'No')
                 estimated_salary = st.slider("Estimated Salary", 0.0, 200000.0, 50000.0)
                 
                 submitted = st.form_submit_button("Predict Churn")
 
             if submitted:
+                # Re-added these features to input_data
                 input_data = pd.DataFrame({
                     'CreditScore': [credit_score], 'Geography': [geography], 'Gender': [gender],
                     'Age': [age], 'Tenure': [tenure], 'Balance': [balance],
