@@ -223,12 +223,12 @@ try:
                 X_test_transformed_df = pd.DataFrame(X_test_transformed, columns=preprocessor.get_feature_names_out())
                 
                 explainer = shap.TreeExplainer(model)
-                shap_values = explainer.shap_values(X_test_transformed)
-
+                
                 st.subheader("SHAP Summary Plot")
                 st.write("This plot shows the most important features for churn prediction across all customers.")
-                fig_shap, ax_shap = plt.subplots(figsize=(10, 8)) # Give it more space
-                shap.summary_plot(shap_values, X_test_transformed_df, plot_type="bar", show=False)
+                shap_values_summary = explainer.shap_values(X_test_transformed)
+                fig_shap, ax_shap = plt.subplots(figsize=(10, 8))
+                shap.summary_plot(shap_values_summary, X_test_transformed_df, plot_type="bar", show=False)
                 st.pyplot(fig_shap)
                 plt.clf()
 
@@ -238,19 +238,23 @@ try:
                 
                 if selected_idx is not None:
                     # --- THIS IS THE FIX ---
-                    # The line `shap.initjs()` has been removed as it's not needed for st.shap
-                    
+                    # 1. Get the integer position of the selected index
                     idx_pos = X_test.index.get_loc(selected_idx)
-                    shap_values_single = explainer.shap_values(X_test_transformed[idx_pos])
                     
-                    # Create the force plot object
+                    # 2. Get the transformed data for the single selected customer (must be 2D)
+                    X_selected_transformed = X_test_transformed[[idx_pos]]
+                    
+                    # 3. Calculate SHAP values for that single 2D instance
+                    shap_values_single = explainer.shap_values(X_selected_transformed)
+                    
+                    # 4. Create the force plot object, passing the 1D array of SHAP values
                     force_plot = shap.force_plot(
                         explainer.expected_value, 
-                        shap_values_single, 
-                        X_test.iloc[[idx_pos]]
+                        shap_values_single[0], # Use the first (and only) row of SHAP values
+                        X_test.iloc[[idx_pos]] # Use original features for display
                     )
                     
-                    # Render the plot using st.shap
+                    # 5. Render the plot using st.shap
                     st.shap(force_plot, height=200)
 
 
