@@ -102,7 +102,8 @@ try:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 6))
         
         # Confusion Matrix
-        sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt='d', ax1, cmap='Blues')
+        # --- THIS IS THE FIX ---
+        sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt='d', ax=ax1, cmap='Blues')
         ax1.set_title('Confusion Matrix')
         ax1.set_xlabel('Predicted'); ax1.set_ylabel('Actual')
 
