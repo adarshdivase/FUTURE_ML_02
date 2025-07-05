@@ -45,7 +45,7 @@ def train_models(df):
 
     # Define features based on the columns ACTUALLY in your dataset
     categorical_features = ['Geography', 'Gender']
-    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'EstimatedSalary']
+    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance']
     
     # Add a check for other potential columns from different versions of the dataset
     if 'NumOfProducts' in X.columns:
@@ -54,6 +54,8 @@ def train_models(df):
         numerical_features.append('HasCrCard')
     if 'IsActiveMember' in X.columns:
         numerical_features.append('IsActiveMember')
+    if 'EstimatedSalary' in X.columns:
+        numerical_features.append('EstimatedSalary')
 
 
     preprocessor = ColumnTransformer(
@@ -170,14 +172,14 @@ try:
                     geography = st.selectbox("Geography", df['Geography'].unique())
                     gender = st.selectbox("Gender", df['Gender'].unique())
                     age = st.slider("Age", 18, 100, 35)
-                    tenure = st.slider("Tenure (years)", 0, 10, 5)
                 with col2:
+                    tenure = st.slider("Tenure (years)", 0, 10, 5)
                     balance = st.slider("Balance", 0.0, 250000.0, 0.0)
                     # Safely add these inputs only if the columns exist in the dataframe
                     num_of_products = st.selectbox("Number of Products", df['NumOfProducts'].unique() if 'NumOfProducts' in df.columns else [1, 2, 3, 4])
                     has_cr_card = st.selectbox("Has Credit Card?", df['HasCrCard'].unique() if 'HasCrCard' in df.columns else [0, 1], format_func=lambda x: 'Yes' if x == 1 else 'No')
                     is_active_member = st.selectbox("Is Active Member?", df['IsActiveMember'].unique() if 'IsActiveMember' in df.columns else [0, 1], format_func=lambda x: 'Yes' if x == 1 else 'No')
-                    estimated_salary = st.slider("Estimated Salary", 0.0, 200000.0, 50000.0)
+                    estimated_salary = st.slider("Estimated Salary", df['EstimatedSalary'].min() if 'EstimatedSalary' in df.columns else 0.0, df['EstimatedSalary'].max() if 'EstimatedSalary' in df.columns else 200000.0, 50000.0)
                 
                 submitted = st.form_submit_button("Predict Churn")
 
@@ -185,7 +187,6 @@ try:
                 input_data_dict = {
                     'CreditScore': credit_score, 'Geography': geography, 'Gender': gender,
                     'Age': age, 'Tenure': tenure, 'Balance': balance,
-                    'EstimatedSalary': estimated_salary
                 }
                 # Safely add the optional columns to the input dictionary
                 if 'NumOfProducts' in df.columns:
@@ -194,6 +195,8 @@ try:
                     input_data_dict['HasCrCard'] = has_cr_card
                 if 'IsActiveMember' in df.columns:
                     input_data_dict['IsActiveMember'] = is_active_member
+                if 'EstimatedSalary' in df.columns:
+                    input_data_dict['EstimatedSalary'] = estimated_salary
                 
                 input_data = pd.DataFrame([input_data_dict])
                 churn_proba = xgb_pipeline.predict_proba(input_data)[0, 1]
@@ -206,7 +209,7 @@ try:
 
         with tab3:
             st.header("🧠 Explaining the 'Why' Behind Predictions with SHAP")
-            st.write("SHAP helps us understand why the model makes a certain decision. The plot below shows how much each feature contributed to pushing the prediction to the final output.")
+            st.write("SHAP helps us understand why the model makes a certain decision. The plot below shows how much each feature contributed to pushing the prediction from the base value to the final output.")
             
             preprocessor = xgb_pipeline.named_steps['preprocessor']
             model = xgb_pipeline.named_steps['classifier']
@@ -219,7 +222,7 @@ try:
 
             st.subheader("SHAP Summary Plot")
             st.write("This plot shows the most important features for churn prediction across all customers.")
-            fig_shap, ax_shap = plt.subplots()
+            fig_shap, ax_shap = plt.subplots(figsize=(10, 8)) # Give it more space
             shap.summary_plot(shap_values, X_test_transformed_df, plot_type="bar", show=False)
             st.pyplot(fig_shap)
             plt.clf()
@@ -230,22 +233,26 @@ try:
             
             if selected_idx is not None:
                 # --- THIS IS THE FIX ---
-                # 1. Get the integer position of the selected index
+                # 1. Use st.shap to display the force plot, which is more stable
+                # 2. We need to initialize the JS visualizer for SHAP
+                shap.initjs()
+                
+                # 3. Get the integer position of the selected index
                 idx_pos = X_test.index.get_loc(selected_idx)
                 
-                # 2. Get the transformed data for the single selected customer
-                X_selected_transformed = X_test_transformed[idx_pos:idx_pos+1]
+                # 4. Calculate SHAP values for that single instance
+                shap_values_single = explainer.shap_values(X_test_transformed[idx_pos])
                 
-                # 3. Calculate SHAP values for that single instance
-                shap_values_single = explainer.shap_values(X_selected_transformed)
+                # 5. Create the force plot object
+                force_plot = shap.force_plot(
+                    explainer.expected_value, 
+                    shap_values_single, 
+                    X_test.iloc[[idx_pos]]
+                )
                 
-                # 4. Use the transformed data (as a DataFrame with correct columns) for the plot
-                X_selected_transformed_df = X_test_transformed_df.iloc[[idx_pos]]
+                # 6. Render the plot using st.shap
+                st.shap(force_plot, height=200)
 
-                fig_force, ax_force = plt.subplots()
-                shap.force_plot(explainer.expected_value, shap_values_single, X_selected_transformed_df, matplotlib=True, show=False)
-                st.pyplot(fig_force)
-                plt.clf()
 
 except FileNotFoundError:
     st.error(f"Error: The data file was not found at '{CSV_FILE_PATH}'. Please make sure the file is in the same folder as the app and has the correct name.")
