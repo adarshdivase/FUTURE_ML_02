@@ -97,7 +97,8 @@ def train_model(df):
     xgb_pipeline = ImbPipeline(steps=[
         ('preprocessor', preprocessor),
         ('smote', SMOTE(random_state=42)),
-        ('classifier', XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42))
+        # Removed use_label_encoder=False as it's deprecated and not needed with eval_metric
+        ('classifier', XGBClassifier(eval_metric='logloss', random_state=42)) 
     ])
     
     # --- Hyperparameter Tuning with GridSearchCV ---
