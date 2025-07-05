@@ -19,8 +19,8 @@ warnings.filterwarnings("ignore")
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="Customer Churn Prediction",
-    page_icon="⚡",
+    page_title="Bank Customer Churn Prediction",
+    page_icon="🏦",
     layout="wide"
 )
 
@@ -30,52 +30,30 @@ CSV_FILE_PATH = "Customer Churn new.csv" # Make sure your CSV file is named this
 # --- Data Loading and Preprocessing ---
 @st.cache_data
 def load_data(path):
-    """Loads and preprocesses the Telco Churn dataset."""
+    """Loads and preprocesses the Bank Churn dataset."""
     df = pd.read_csv(path)
     
-    # --- THIS IS THE FIX ---
-    # Strip any leading/trailing whitespace from all column names
-    df.columns = df.columns.str.strip()
-
-    # Check for common variations and rename to the expected 'TotalCharges'
-    if 'Total Charges' in df.columns:
-        df.rename(columns={'Total Charges': 'TotalCharges'}, inplace=True)
-    elif 'Total_Charges' in df.columns: # Added check for underscore variation
-        df.rename(columns={'Total_Charges': 'TotalCharges'}, inplace=True)
-
-
-    # Data Cleaning
-    # Add a check here to make sure the column exists before using it
-    if 'TotalCharges' in df.columns:
-        df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
-        df.dropna(subset=['TotalCharges'], inplace=True)
-    else:
-        st.error("Fatal Error: Could not find a column for total charges (e.g., 'TotalCharges', 'Total Charges').")
-        st.info("The columns found in your CSV file are:")
-        st.code(f"{df.columns.tolist()}") # Display the actual column names found
-        return None # Stop execution
-
-    if 'customerID' in df.columns:
-        df.drop(columns=['customerID'], inplace=True)
-        
-    df['Churn'] = df['Churn'].apply(lambda x: 1 if x == 'Yes' else 0)
+    # Drop unnecessary columns
+    df.drop(columns=['RowNumber', 'CustomerId', 'Surname'], inplace=True)
+    
+    # The target variable is 'Exited'
     return df
 
 @st.cache_resource
 def train_model(df):
     """Preprocesses data, trains a Random Forest model, and returns it."""
-    X = df.drop('Churn', axis=1)
-    y = df['Churn']
+    X = df.drop('Exited', axis=1)
+    y = df['Exited']
 
-    # Define categorical and numerical features
-    categorical_features = X.select_dtypes(include=['object']).columns
-    numerical_features = X.select_dtypes(include=np.number).columns
+    # Define categorical and numerical features based on the new dataset
+    categorical_features = ['Geography', 'Gender']
+    numerical_features = ['CreditScore', 'Age', 'Tenure', 'Balance', 'NumOfProducts', 'HasCrCard', 'IsActiveMember', 'EstimatedSalary']
 
     # Create preprocessing pipelines
     preprocessor = ColumnTransformer(
         transformers=[
             ('num', StandardScaler(), numerical_features),
-            ('cat', OneHotEncoder(handle_unknown='ignore', sparse=False), categorical_features)
+            ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_features)
         ])
 
     # Create a full pipeline for preprocessing and modeling
@@ -93,8 +71,8 @@ def train_model(df):
     return rf_pipeline, X_test, y_test
 
 # --- Main App ---
-st.title("⚡ Customer Churn Prediction Dashboard")
-st.write("This app analyzes customer data to predict churn using a Random Forest model.")
+st.title("🏦 Bank Customer Churn Prediction")
+st.write("This app analyzes customer data to predict whether they will exit the bank (churn).")
 
 # Load data and train model
 try:
@@ -142,42 +120,25 @@ try:
         st.sidebar.header("🔮 Predict Live Churn")
         st.sidebar.write("Enter a customer's details to predict their churn probability.")
 
-        # Create input fields in the sidebar
-        # Use a function to safely get unique values, in case a column is missing
-        def get_unique_values(column_name):
-            if column_name in df.columns:
-                return df[column_name].unique()
-            return []
-
-        gender = st.sidebar.selectbox("Gender", get_unique_values('gender'))
-        senior_citizen = st.sidebar.selectbox("Senior Citizen", [0, 1])
-        partner = st.sidebar.selectbox("Partner", get_unique_values('Partner'))
-        dependents = st.sidebar.selectbox("Dependents", get_unique_values('Dependents'))
-        tenure = st.sidebar.slider("Tenure (months)", 0, 72, 12)
-        phone_service = st.sidebar.selectbox("Phone Service", get_unique_values('PhoneService'))
-        multiple_lines = st.sidebar.selectbox("Multiple Lines", get_unique_values('MultipleLines'))
-        internet_service = st.sidebar.selectbox("Internet Service", get_unique_values('InternetService'))
-        online_security = st.sidebar.selectbox("Online Security", get_unique_values('OnlineSecurity'))
-        online_backup = st.sidebar.selectbox("Online Backup", get_unique_values('OnlineBackup'))
-        device_protection = st.sidebar.selectbox("Device Protection", get_unique_values('DeviceProtection'))
-        tech_support = st.sidebar.selectbox("Tech Support", get_unique_values('TechSupport'))
-        streaming_tv = st.sidebar.selectbox("Streaming TV", get_unique_values('StreamingTV'))
-        streaming_movies = st.sidebar.selectbox("Streaming Movies", get_unique_values('StreamingMovies'))
-        contract = st.sidebar.selectbox("Contract", get_unique_values('Contract'))
-        paperless_billing = st.sidebar.selectbox("Paperless Billing", get_unique_values('PaperlessBilling'))
-        payment_method = st.sidebar.selectbox("Payment Method", get_unique_values('PaymentMethod'))
-        monthly_charges = st.sidebar.slider("Monthly Charges ($)", 18.0, 120.0, 70.0)
-        total_charges = st.sidebar.slider("Total Charges ($)", 18.0, 9000.0, 1400.0)
-
+        # Create input fields in the sidebar based on the new dataset
+        credit_score = st.sidebar.slider("Credit Score", 300, 850, 650)
+        geography = st.sidebar.selectbox("Geography", df['Geography'].unique())
+        gender = st.sidebar.selectbox("Gender", df['Gender'].unique())
+        age = st.sidebar.slider("Age", 18, 100, 35)
+        tenure = st.sidebar.slider("Tenure (years)", 0, 10, 5)
+        balance = st.sidebar.slider("Balance", 0.0, 250000.0, 0.0)
+        num_of_products = st.sidebar.selectbox("Number of Products", [1, 2, 3, 4])
+        has_cr_card = st.sidebar.selectbox("Has Credit Card?", [0, 1])
+        is_active_member = st.sidebar.selectbox("Is Active Member?", [0, 1])
+        estimated_salary = st.sidebar.slider("Estimated Salary", 0.0, 200000.0, 50000.0)
+        
         if st.sidebar.button("Predict Churn"):
             # Create a DataFrame from the inputs
             input_data = pd.DataFrame({
-                'gender': [gender], 'SeniorCitizen': [senior_citizen], 'Partner': [partner], 'Dependents': [dependents],
-                'tenure': [tenure], 'PhoneService': [phone_service], 'MultipleLines': [multiple_lines],
-                'InternetService': [internet_service], 'OnlineSecurity': [online_security], 'OnlineBackup': [online_backup],
-                'DeviceProtection': [device_protection], 'TechSupport': [tech_support], 'StreamingTV': [streaming_tv],
-                'StreamingMovies': [streaming_movies], 'Contract': [contract], 'PaperlessBilling': [paperless_billing],
-                'PaymentMethod': [payment_method], 'MonthlyCharges': [monthly_charges], 'TotalCharges': [total_charges]
+                'CreditScore': [credit_score], 'Geography': [geography], 'Gender': [gender],
+                'Age': [age], 'Tenure': [tenure], 'Balance': [balance],
+                'NumOfProducts': [num_of_products], 'HasCrCard': [has_cr_card],
+                'IsActiveMember': [is_active_member], 'EstimatedSalary': [estimated_salary]
             })
 
             # Make prediction
