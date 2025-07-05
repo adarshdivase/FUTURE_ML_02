@@ -264,7 +264,7 @@ def create_sample_data():
     return df
 
 @st.cache_data
-def load_data(uploaded_file=None, default_file_path='data/customer_churn_with_added_features.csv'):
+def load_data(uploaded_file=None, default_file_path='customer_churn_with_added_features.csv'): # CHANGED PATH HERE
     """
     Load data from an uploaded CSV or a default file path.
     If both fail, create sample data.
@@ -582,7 +582,7 @@ def create_feature_importance_chart(pipeline, X_test, y_test):
         
     except Exception as e:
         st.error(f"Error creating feature importance chart: {e}")
-        st.exception(e) # Show full traceback
+        st.exception(e)
         return None, None
 
 def create_data_explorer_charts(df):
@@ -661,47 +661,38 @@ def analyze_customer_prediction(pipeline, customer_data, X_train_original_column
                 customer_data_aligned[col] = customer_data[col]
             else:
                 # Fill missing columns: numerical to 0, categorical to 'Unknown'
-                # This logic relies on preprocessor having seen 'Unknown' or handling it via handle_unknown='ignore'
-                if col in pipeline.named_steps['preprocessor'].named_transformers_['num'].get_feature_names_out().tolist():
+                if col in [name for name, _, _ in pipeline.named_steps['preprocessor'].transformers if name == 'num'][0][1].get_feature_names_out().tolist():
                     customer_data_aligned[col] = 0.0 # Default numerical to 0
-                elif col in [name for (name, _, _) in pipeline.named_steps['preprocessor'].transformers if name == 'cat'][0][1].get_feature_names_out().tolist():
-                     # This check for categorical is more robust, assuming the transformer named 'cat' exists
+                elif col in [name for name, _, _ in pipeline.named_steps['preprocessor'].transformers if name == 'cat'][0][1].get_feature_names_out().tolist():
                      customer_data_aligned[col] = np.nan # Let preprocessor handle NaN for new categories (will become 0 for OHE)
                 else:
-                    # Fallback for columns not explicitly numerical or categorical in the preprocessor setup
-                    customer_data_aligned[col] = np.nan # Or a suitable default value based on type
+                    customer_data_aligned[col] = np.nan
 
-        # Handle any NaN introduced by alignment before prediction
-        customer_data_aligned = customer_data_aligned.fillna(0) # For numerical, NaN will be 0. For OHE, new categories become all zeros.
+        customer_data_aligned = customer_data_aligned.fillna(0) # Fill any NaN introduced by alignment
 
-        # The preprocessor expects all columns from X_train
         customer_data_for_prediction = customer_data_aligned.iloc[0:1] # Take only the first row
         
         pred_proba = pipeline.predict_proba(customer_data_for_prediction)[0, 1]
         pred_class = pipeline.predict(customer_data_for_prediction)[0]
 
         model = pipeline.named_steps['classifier']
-        # The feature_importances_ from XGBoost are for the features *after* preprocessing
         model_feature_importance = model.feature_importances_
 
         preprocessor = pipeline.named_steps['preprocessor']
-        # Get the names of the features AFTER preprocessing
         preprocessor_feature_names = preprocessor.get_feature_names_out()
 
-        # Create analysis DataFrame
         analysis_df = pd.DataFrame({
             'feature': preprocessor_feature_names,
             'importance': model_feature_importance
         })
         
-        # Sort by importance
         analysis_df = analysis_df.sort_values('importance', ascending=False).reset_index(drop=True)
 
         return pred_proba, pred_class, analysis_df
 
     except Exception as e:
         st.error(f"Error analyzing customer prediction: {e}")
-        st.exception(e) # Show full traceback for debugging
+        st.exception(e)
         return None, None, None
 
 def create_individual_analysis_chart(analysis_df):
@@ -788,7 +779,8 @@ with st.sidebar:
     )
     
     # Load data using the updated function
-    df = load_data(uploaded_file=uploaded_file)
+    # The default_file_path is now set to 'customer_churn_with_added_features.csv'
+    df = load_data(uploaded_file=uploaded_file, default_file_path='customer_churn_with_added_features.csv')
     
     # Model information section
     st.markdown("---")
@@ -853,11 +845,10 @@ if df is not None and not df.empty:
     if not st.session_state.model_trained or st.session_state.pipeline is None:
         with st.spinner("🚀 Training advanced XGBoost model with optimized hyperparameters..."):
             progress_bar = st.progress(0)
-            # Simulate progress bar filling up, actual training time varies
             import time
             for i in range(100):
                 progress_bar.progress(i + 1)
-                time.sleep(0.01) # Small delay for visual effect
+                time.sleep(0.01)
             
             pipeline, X_test, y_test, X_train, preprocessor = train_model(df)
             
@@ -866,7 +857,7 @@ if df is not None and not df.empty:
             st.session_state.pipeline = pipeline
             st.session_state.X_test = X_test
             st.session_state.y_test = y_test
-            st.session_state.X_train_cols = X_train.columns.tolist() # Store original X_train columns
+            st.session_state.X_train_cols = X_train.columns.tolist()
             st.session_state.preprocessor = preprocessor
             st.session_state.model_trained = True
         else:
@@ -1084,51 +1075,42 @@ if df is not None and not df.empty:
                     if missing_cols:
                         st.warning(f"Batch file is missing columns expected by the model: {', '.join(missing_cols)}. These will be treated as absent (e.g., 0 for numerical, new category for categorical).")
                         for col in missing_cols:
-                            # Assign default based on type; careful with categorical
-                            if col in df.select_dtypes(include=np.number).columns: # Check if it's a numerical feature from original df
-                                batch_df_for_prediction[col] = 0.0 # Fill with 0 for numerical
-                            else: # Assume categorical for others
-                                # For categorical, OneHotEncoder with handle_unknown='ignore' will produce all zeros for unknown categories
-                                batch_df_for_prediction[col] = 'Unknown' # A placeholder for missing categorical data if you want to explicitly see it
+                            if col in df.select_dtypes(include=np.number).columns:
+                                batch_df_for_prediction[col] = 0.0
+                            else:
+                                batch_df_for_prediction[col] = 'Unknown'
                     
                     if extra_cols:
                         st.warning(f"Batch file contains extra columns not used by the model: {', '.join(extra_cols)}. These will be ignored.")
-                        # Filter to keep only expected columns
                         batch_df_for_prediction = batch_df_for_prediction[[col for col in X_train_original_columns if col in batch_df_for_prediction.columns]]
                     
-                    # Reorder columns to match the training data (important for consistent preprocessing)
-                    batch_df_for_prediction = batch_df_for_prediction.reindex(columns=X_train_original_columns, fill_value=0) # Fill new numeric columns with 0
-
+                    batch_df_for_prediction = batch_df_for_prediction.reindex(columns=X_train_original_columns, fill_value=0)
+                    
                     # Display sample data used for prediction
                     st.markdown("### 📋 Sample Data (for prediction)")
                     st.dataframe(batch_df_for_prediction.head(), use_container_width=True)
                     
                     if st.button("🚀 Generate Batch Predictions", use_container_width=True):
                         with st.spinner("🔄 Generating predictions..."):
-                            # Make batch predictions
                             proba_output = pipeline.predict_proba(batch_df_for_prediction)
                             
-                            # Check if predict_proba returned at least 2 columns
                             if proba_output.shape[1] > 1:
                                 batch_predictions = proba_output[:, 1]
                             else:
                                 st.error("Model's predict_proba returned only one column. This might indicate an issue with the model or input data.")
-                                st.stop() # Stop execution to prevent further errors
+                                st.stop()
                             
                             batch_classes = pipeline.predict(batch_df_for_prediction)
                             
-                            # Add predictions to dataframe
                             batch_df['Churn_Probability'] = batch_predictions
                             batch_df['Churn_Prediction'] = batch_classes
                             batch_df['Risk_Level'] = batch_df['Churn_Probability'].apply(
                                 lambda x: 'High Risk' if x > 0.7 else 'Medium Risk' if x > 0.3 else 'Low Risk'
                             )
                             
-                            # Display results
                             st.markdown("### 🎯 Batch Prediction Results")
                             st.dataframe(batch_df, use_container_width=True)
                             
-                            # Summary statistics
                             col1, col2, col3 = st.columns(3)
                             
                             with col1:
@@ -1143,7 +1125,6 @@ if df is not None and not df.empty:
                                 low_risk = (batch_df['Risk_Level'] == 'Low Risk').sum()
                                 st.metric("Low Risk Customers", low_risk)
                             
-                            # Download results
                             csv = batch_df.to_csv(index=False).encode('utf-8')
                             st.download_button(
                                 label="📥 Download Predictions",
@@ -1153,7 +1134,6 @@ if df is not None and not df.empty:
                                 use_container_width=True
                             )
                             
-                            # Risk distribution chart
                             risk_counts = batch_df['Risk_Level'].value_counts().reindex(['Low Risk', 'Medium Risk', 'High Risk'])
                             risk_counts = risk_counts.fillna(0)
                             fig_risk = px.pie(
@@ -1175,7 +1155,6 @@ if df is not None and not df.empty:
             else:
                 st.info("📁 Please upload a CSV file for batch prediction")
                 
-                # Sample format information
                 st.markdown("### 📝 Required CSV Format")
                 sample_format = pd.DataFrame({
                     'CreditScore': [650, 720, 580],
@@ -1192,7 +1171,6 @@ if df is not None and not df.empty:
                 
                 st.dataframe(sample_format, use_container_width=True)
                 
-                # Download sample format
                 csv_sample = sample_format.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Download Sample Format",
