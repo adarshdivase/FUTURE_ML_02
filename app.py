@@ -264,7 +264,7 @@ def create_sample_data():
     return df
 
 @st.cache_data
-def load_data(uploaded_file=None, default_file_path='customer_churn_with_added_features.csv'): # CHANGED PATH HERE
+def load_data(uploaded_file=None, default_file_path='customer_churn_with_added_features.csv'):
     """
     Load data from an uploaded CSV or a default file path.
     If both fail, create sample data.
@@ -499,91 +499,132 @@ def plot_enhanced_roc_curve(y_test, y_proba):
 
     return fig
 
+# Helper function to clean feature names
+def clean_feature_name(feature_name):
+    if feature_name.startswith('num__'):
+        return feature_name.replace('num__', '')
+    elif feature_name.startswith('cat__'):
+        parts = feature_name.replace('cat__', '').split('_')
+        return f"{parts[0].title()}: {parts[1].title()}" if len(parts) > 1 else feature_name.replace('cat__', '').title()
+    else:
+        return feature_name.replace('_', ' ').title()
+
 def create_feature_importance_chart(pipeline, X_test, y_test):
-    """Create interactive feature importance chart"""
+    """
+    Create interactive feature importance charts (built-in and permutation).
+    Returns built-in importance figure, combined importance DataFrame, and permutation importance figure.
+    """
     try:
         preprocessor = pipeline.named_steps['preprocessor']
-        
-        # Get feature names out from the preprocessor (based on training data)
+        classifier = pipeline.named_steps['classifier']
+
+        # Get feature names after one-hot encoding
         all_feature_names = preprocessor.get_feature_names_out()
 
-        # The classifier expects the preprocessed data, so we'll transform X_test first
+        # Built-in feature importance (from XGBoost)
+        built_in_importance = classifier.feature_importances_
+        
+        # Create DataFrame for built-in importance
+        built_in_importance_df = pd.DataFrame({
+            'feature': all_feature_names,
+            'importance': built_in_importance
+        })
+        built_in_importance_df['cleaned_feature'] = built_in_importance_df['feature'].apply(clean_feature_name)
+        built_in_importance_df = built_in_importance_df.sort_values('importance', ascending=True)
+
+        # Create plotly bar chart for built-in importance
+        fig_built_in = go.Figure()
+        fig_built_in.add_trace(go.Bar(
+            x=built_in_importance_df['importance'],
+            y=built_in_importance_df['cleaned_feature'],
+            orientation='h',
+            marker=dict(
+                color=built_in_importance_df['importance'],
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(title="Importance")
+            ),
+            text=[f'{val:.4f}' for val in built_in_importance_df['importance']],
+            textposition='outside'
+        ))
+        fig_built_in.update_layout(
+            title={
+                'text': "Built-in Feature Importance (XGBoost)",
+                'x': 0.5, 'xanchor': 'center', 'font': {'size': 20}
+            },
+            xaxis_title="Feature Importance Score",
+            yaxis_title="Features",
+            height=max(600, len(built_in_importance_df) * 30),
+            showlegend=False
+        )
+
+        # Permutation Importance
         X_test_transformed = preprocessor.transform(X_test)
         
         # Identify features with non-zero variance in the transformed data for permutation importance
         variances = np.var(X_test_transformed, axis=0)
         non_zero_variance_mask = variances > 1e-10
         
-        # Filter both the transformed data and the feature names
         X_test_filtered = X_test_transformed[:, non_zero_variance_mask]
         feature_names_filtered = all_feature_names[non_zero_variance_mask]
-        
-        classifier = pipeline.named_steps['classifier']
-        
+
         perm_importance = permutation_importance(
             classifier, X_test_filtered, y_test,
             n_repeats=10, random_state=42, n_jobs=1,
             scoring='roc_auc'
         )
         
-        # Clean feature names for display
-        cleaned_names = []
-        for feature in feature_names_filtered:
-            if feature.startswith('num__'):
-                cleaned_names.append(feature.replace('num__', ''))
-            elif feature.startswith('cat__'):
-                parts = feature.replace('cat__', '').split('_')
-                if len(parts) > 1:
-                    cleaned_names.append(f"{parts[0].title()}: {parts[1].title()}")
-                else:
-                    cleaned_names.append(feature.replace('cat__', '').title())
-            else:
-                cleaned_names.append(feature.replace('_', ' ').title())
-        
-        # Create DataFrame
-        importance_df = pd.DataFrame({
-            'feature': cleaned_names,
-            'importance': perm_importance.importances_mean,
-            'std': perm_importance.importances_std
-        }).sort_values('importance', ascending=True)
-        
-        # Create plotly bar chart
-        fig = go.Figure()
-        
-        fig.add_trace(go.Bar(
-            x=importance_df['importance'],
-            y=importance_df['feature'],
+        perm_importance_df = pd.DataFrame({
+            'feature': feature_names_filtered,
+            'perm_importance': perm_importance.importances_mean,
+            'perm_std': perm_importance.importances_std
+        })
+        perm_importance_df['cleaned_feature'] = perm_importance_df['feature'].apply(clean_feature_name)
+        perm_importance_df = perm_importance_df.sort_values('perm_importance', ascending=True)
+
+        # Create plotly bar chart for permutation importance
+        fig_perm_importance = go.Figure()
+        fig_perm_importance.add_trace(go.Bar(
+            x=perm_importance_df['perm_importance'],
+            y=perm_importance_df['cleaned_feature'],
             orientation='h',
-            error_x=dict(type='data', array=importance_df['std']),
+            error_x=dict(type='data', array=perm_importance_df['perm_std']),
             marker=dict(
-                color=importance_df['importance'],
-                colorscale='Viridis',
+                color=perm_importance_df['perm_importance'],
+                colorscale='Cividis', # Different color scale for distinction
                 showscale=True,
                 colorbar=dict(title="Importance")
             ),
-            text=[f'{val:.4f}' for val in importance_df['importance']],
+            text=[f'{val:.4f}' for val in perm_importance_df['perm_importance']],
             textposition='outside'
         ))
-        
-        fig.update_layout(
+        fig_perm_importance.update_layout(
             title={
-                'text': "Feature Importance Analysis",
-                'x': 0.5,
-                'xanchor': 'center',
-                'font': {'size': 20}
+                'text': "Permutation Feature Importance (AUC Score Drop)",
+                'x': 0.5, 'xanchor': 'center', 'font': {'size': 20}
             },
-            xaxis_title="Permutation Importance (AUC Score Drop)",
+            xaxis_title="Importance (Mean AUC Drop)",
             yaxis_title="Features",
-            height=max(600, len(importance_df) * 30),
+            height=max(600, len(perm_importance_df) * 30),
             showlegend=False
         )
         
-        return fig, importance_df
-        
+        # Merge built-in and permutation importance into a single DataFrame for summary display
+        combined_importance_df = pd.merge(
+            built_in_importance_df,
+            perm_importance_df[['feature', 'perm_importance', 'perm_std']],
+            on='feature',
+            how='left'
+        )
+        # Sort by built-in importance for the summary list as it's typically what models provide by default
+        combined_importance_df = combined_importance_df.sort_values('importance', ascending=False).reset_index(drop=True)
+
+        return fig_built_in, combined_importance_df, fig_perm_importance
+            
     except Exception as e:
         st.error(f"Error creating feature importance chart: {e}")
         st.exception(e)
-        return None, None
+        return None, None, None # Return three Nones if an error occurs
 
 def create_data_explorer_charts(df):
     """Create interactive charts for data exploration"""
@@ -661,12 +702,16 @@ def analyze_customer_prediction(pipeline, customer_data, X_train_original_column
                 customer_data_aligned[col] = customer_data[col]
             else:
                 # Fill missing columns: numerical to 0, categorical to 'Unknown'
-                if col in [name for name, _, _ in pipeline.named_steps['preprocessor'].transformers if name == 'num'][0][1].get_feature_names_out().tolist():
+                # This logic assumes the preprocessor for 'num' produces numerical columns
+                # and for 'cat' produces one-hot encoded columns.
+                if col in [name for name, _, _ in pipeline.named_steps['preprocessor'].transformers if name == 'num'][0][2]: # Use index 2 for features list
                     customer_data_aligned[col] = 0.0 # Default numerical to 0
-                elif col in [name for name, _, _ in pipeline.named_steps['preprocessor'].transformers if name == 'cat'][0][1].get_feature_names_out().tolist():
-                     customer_data_aligned[col] = np.nan # Let preprocessor handle NaN for new categories (will become 0 for OHE)
+                elif col in [name for name, _, _ in pipeline.named_steps['preprocessor'].transformers if name == 'cat'][0][2]:
+                    # For categorical, it's safer to use the 'handle_unknown' of OHE
+                    # and ensure the column exists, then fill with a placeholder if needed
+                    customer_data_aligned[col] = np.nan # Let preprocessor handle NaN for new categories (will become 0 for OHE)
                 else:
-                    customer_data_aligned[col] = np.nan
+                    customer_data_aligned[col] = np.nan # Fallback for other types
 
         customer_data_aligned = customer_data_aligned.fillna(0) # Fill any NaN introduced by alignment
 
@@ -685,7 +730,7 @@ def analyze_customer_prediction(pipeline, customer_data, X_train_original_column
             'feature': preprocessor_feature_names,
             'importance': model_feature_importance
         })
-        
+        analysis_df['cleaned_feature'] = analysis_df['feature'].apply(clean_feature_name)
         analysis_df = analysis_df.sort_values('importance', ascending=False).reset_index(drop=True)
 
         return pred_proba, pred_class, analysis_df
@@ -698,22 +743,6 @@ def analyze_customer_prediction(pipeline, customer_data, X_train_original_column
 def create_individual_analysis_chart(analysis_df):
     """Create individual customer analysis chart"""
     top_features = analysis_df.head(10).copy()
-
-    # Clean feature names
-    cleaned_names = []
-    for feature in top_features['feature']:
-        if feature.startswith('num__'):
-            cleaned_names.append(feature.replace('num__', ''))
-        elif feature.startswith('cat__'):
-            parts = feature.replace('cat__', '').split('_')
-            if len(parts) > 1:
-                cleaned_names.append(f"{parts[0].title()}: {parts[1].title()}")
-            else:
-                cleaned_names.append(feature.replace('cat__', '').title())
-        else:
-            cleaned_names.append(feature.replace('_', ' ').title())
-
-    top_features['cleaned_feature'] = cleaned_names
     
     fig = go.Figure()
 
@@ -951,20 +980,34 @@ if df is not None and not df.empty:
                 for metric, value in metrics_dict.items():
                     st.metric(metric, f"{value:.3f}")
             
-            # Feature importance analysis
+            # Feature importance analysis (UPDATED SECTION)
             st.markdown("### 🎯 Feature Importance Analysis")
-            
-            feature_importance_fig, importance_df = create_feature_importance_chart(pipeline, X_test, y_test)
-            
-            if feature_importance_fig:
+
+            result = create_feature_importance_chart(pipeline, X_test, y_test)
+
+            if result[0] is not None:  # If we got at least the built-in feature importance figure
+                feature_importance_fig, importance_df, perm_importance_fig = result
+                
+                # Display the built-in feature importance
                 st.plotly_chart(feature_importance_fig, use_container_width=True)
+                
+                # If permutation importance was also calculated, display it
+                if perm_importance_fig is not None:
+                    st.plotly_chart(perm_importance_fig, use_container_width=True)
                 
                 # Top features summary
                 st.markdown("### 🔝 Top 5 Most Important Features")
                 if importance_df is not None:
-                    top_features = importance_df.tail(5)
+                    # Sort by the built-in importance for consistent display of "Top 5"
+                    # Or choose to sort by permutation importance if that's preferred for ranking
+                    top_features = importance_df.sort_values('importance', ascending=False).head(5) 
                     for idx, row in top_features.iterrows():
-                        st.write(f"**{row['feature']}**: {row['importance']:.4f} ± {row['std']:.4f}")
+                        if 'perm_importance' in row and not pd.isna(row['perm_importance']): # Check for NaN explicitly
+                            st.write(f"**{row['cleaned_feature']}**: Built-in: {row['importance']:.4f}, Permutation: {row['perm_importance']:.4f} ± {row['perm_std']:.4f}")
+                        else:
+                            st.write(f"**{row['cleaned_feature']}**: {row['importance']:.4f}")
+            else:
+                st.error("Could not generate feature importance analysis. Please check the model and data.")
         
         # Tab 3: Live Prediction
         with tab3:
@@ -1075,10 +1118,12 @@ if df is not None and not df.empty:
                     if missing_cols:
                         st.warning(f"Batch file is missing columns expected by the model: {', '.join(missing_cols)}. These will be treated as absent (e.g., 0 for numerical, new category for categorical).")
                         for col in missing_cols:
-                            if col in df.select_dtypes(include=np.number).columns:
+                            # This needs to infer type from X_train_original_columns or preprocessor
+                            # For simplicity, based on sample data, assume numeric gets 0, others 'Unknown'
+                            if col in df.select_dtypes(include=np.number).columns: # Check original df's numeric columns
                                 batch_df_for_prediction[col] = 0.0
                             else:
-                                batch_df_for_prediction[col] = 'Unknown'
+                                batch_df_for_prediction[col] = 'Unknown' # OneHotEncoder handles 'unknown' categories
                     
                     if extra_cols:
                         st.warning(f"Batch file contains extra columns not used by the model: {', '.join(extra_cols)}. These will be ignored.")
@@ -1147,7 +1192,7 @@ if df is not None and not df.empty:
                                 }
                             )
                             st.plotly_chart(fig_risk, use_container_width=True)
-                
+                    
                 except Exception as e:
                     st.error(f"❌ Error processing batch file: {e}. Please ensure your CSV has the correct format and data types.")
                     st.exception(e)
@@ -1182,9 +1227,6 @@ if df is not None and not df.empty:
     
     else:
         st.error("❌ Model training failed or no model available. Please check your data and try again.")
-
-else:
-    st.error("❌ No data available. Please upload a valid CSV file or ensure the default file exists and is valid.")
 
 # Enhanced footer
 st.markdown("---")
