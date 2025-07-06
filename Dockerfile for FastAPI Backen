@@ -1,0 +1,29 @@
+# Use an official Python runtime as a parent image.
+# Python 3.9 or 3.10 is recommended for compatibility with AI libraries.
+# Using 3.10-slim-buster for a smaller image size.
+FROM python:3.10-slim-buster
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Copy the requirements file into the container at /app
+COPY requirements.txt .
+
+# Install any needed packages specified in requirements.txt
+# Use --no-cache-dir to save space
+# Ensure uvicorn[standard] is installed for ASGI server
+# Ensure python-multipart is installed for file uploads
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application code to the container
+COPY . .
+
+# Expose the port that the application will listen on.
+# Cloud Run automatically sets the PORT environment variable.
+ENV PORT 8000
+EXPOSE 8000
+
+# Run the application using uvicorn.
+# The --host 0.0.0.0 is crucial for binding to all available network interfaces
+# within the container, allowing Cloud Run to route traffic to it.
+CMD ["uvicorn", "merged_backend:app", "--host", "0.0.0.0", "--port", "8000"]
