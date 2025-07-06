@@ -558,24 +558,20 @@ def create_feature_importance_chart(pipeline, X_test, y_test):
             showlegend=False
         )
 
-        # Permutation Importance
-        X_test_transformed = preprocessor.transform(X_test)
-        
-        # Identify features with non-zero variance in the transformed data for permutation importance
-        variances = np.var(X_test_transformed, axis=0)
-        non_zero_variance_mask = variances > 1e-10
-        
-        X_test_filtered = X_test_transformed[:, non_zero_variance_mask]
-        feature_names_filtered = all_feature_names[non_zero_variance_mask]
-
+        # Permutation Importance - FIXED VERSION
+        # Use the FULL pipeline for permutation importance, not just the classifier
+        # This ensures the preprocessing step is included in the permutation
         perm_importance = permutation_importance(
-            classifier, X_test_filtered, y_test,
+            pipeline, X_test, y_test,  # Use pipeline and original X_test
             n_repeats=10, random_state=42, n_jobs=1,
             scoring='roc_auc'
         )
         
+        # Get the original feature names (before preprocessing)
+        original_feature_names = X_test.columns
+        
         perm_importance_df = pd.DataFrame({
-            'feature': feature_names_filtered,
+            'feature': original_feature_names,
             'perm_importance': perm_importance.importances_mean,
             'perm_std': perm_importance.importances_std
         })
@@ -609,14 +605,30 @@ def create_feature_importance_chart(pipeline, X_test, y_test):
             showlegend=False
         )
         
-        # Merge built-in and permutation importance into a single DataFrame for summary display
-        combined_importance_df = pd.merge(
-            built_in_importance_df,
-            perm_importance_df[['feature', 'perm_importance', 'perm_std']],
-            on='feature',
-            how='left'
-        )
-        # Sort by built-in importance for the summary list as it's typically what models provide by default
+        # Create a combined importance DataFrame for summary
+        # Map built-in importance to original features (approximate mapping)
+        combined_importance_df = pd.DataFrame({
+            'feature': original_feature_names,
+            'cleaned_feature': [clean_feature_name(f) for f in original_feature_names],
+            'perm_importance': perm_importance.importances_mean,
+            'perm_std': perm_importance.importances_std
+        })
+        
+        # Add built-in importance by summing importance of related transformed features
+        built_in_by_original = []
+        for orig_feat in original_feature_names:
+            # Find all transformed features that correspond to this original feature
+            # This handles both 'num__feature' and 'cat__Feature_Category'
+            related_features_mask = np.array([orig_feat in f or f.endswith(orig_feat) for f in all_feature_names])
+            
+            if np.any(related_features_mask):
+                # Sum the importance of related transformed features
+                related_importance = built_in_importance[related_features_mask].sum()
+                built_in_by_original.append(related_importance)
+            else:
+                built_in_by_original.append(0.0) # If no related transformed feature found
+        
+        combined_importance_df['importance'] = built_in_by_original
         combined_importance_df = combined_importance_df.sort_values('importance', ascending=False).reset_index(drop=True)
 
         return fig_built_in, combined_importance_df, fig_perm_importance
@@ -704,14 +716,16 @@ def analyze_customer_prediction(pipeline, customer_data, X_train_original_column
                 # Fill missing columns: numerical to 0, categorical to 'Unknown'
                 # This logic assumes the preprocessor for 'num' produces numerical columns
                 # and for 'cat' produces one-hot encoded columns.
-                if col in [name for name, _, _ in pipeline.named_steps['preprocessor'].transformers if name == 'num'][0][2]: # Use index 2 for features list
+                # Accessing transformers by name and then their feature names is more robust
+                num_features_in_preprocessor = [name for name, _, features in pipeline.named_steps['preprocessor'].transformers_ if name == 'num'][0][2] if 'num' in [t[0] for t in pipeline.named_steps['preprocessor'].transformers_] else []
+                cat_features_in_preprocessor = [name for name, _, features in pipeline.named_steps['preprocessor'].transformers_ if name == 'cat'][0][2] if 'cat' in [t[0] for t in pipeline.named_steps['preprocessor'].transformers_] else []
+
+                if col in num_features_in_preprocessor:
                     customer_data_aligned[col] = 0.0 # Default numerical to 0
-                elif col in [name for name, _, _ in pipeline.named_steps['preprocessor'].transformers if name == 'cat'][0][2]:
-                    # For categorical, it's safer to use the 'handle_unknown' of OHE
-                    # and ensure the column exists, then fill with a placeholder if needed
-                    customer_data_aligned[col] = np.nan # Let preprocessor handle NaN for new categories (will become 0 for OHE)
+                elif col in cat_features_in_preprocessor:
+                    customer_data_aligned[col] = 'Unknown' # OneHotEncoder handles 'unknown' categories
                 else:
-                    customer_data_aligned[col] = np.nan # Fallback for other types
+                    customer_data_aligned[col] = np.nan # Fallback for other types or if not in preprocessor's known features
 
         customer_data_aligned = customer_data_aligned.fillna(0) # Fill any NaN introduced by alignment
 
@@ -980,7 +994,7 @@ if df is not None and not df.empty:
                 for metric, value in metrics_dict.items():
                     st.metric(metric, f"{value:.3f}")
             
-            # Feature importance analysis (UPDATED SECTION)
+            # Feature importance analysis
             st.markdown("### 🎯 Feature Importance Analysis")
 
             result = create_feature_importance_chart(pipeline, X_test, y_test)
